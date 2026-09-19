@@ -1,0 +1,83 @@
+package com.prismai.llmhost
+import com.prismai.llmhost.*
+import com.prismai.llmhost.bridge.*
+import com.prismai.llmhost.service.*
+import com.prismai.llmhost.storage.*
+import com.prismai.llmhost.tools.*
+import com.prismai.llmhost.ui.*
+import com.prismai.llmhost.model.*
+
+data class DeviceCapabilityProfile(
+    val totalRamBytes: Long,
+    val availableRamBytes: Long,
+    val lowMemory: Boolean,
+    val cpuCoreCount: Int,
+    val androidSdk: Int,
+    val abis: List<String>,
+    val storageFreeBytes: Long,
+    val batteryPercent: Int?,
+    val isCharging: Boolean?,
+    val thermalStatus: String?,
+    val memoryClassMb: Int,
+    val largeMemoryClassMb: Int,
+    val appHeapMaxBytes: Long,
+    val isSamsungS25Ultra: Boolean = false,
+    val s25RamTier: String = "STANDARD",
+    val hasSPenSupport: Boolean = false,
+    val capturedAt: Long = System.currentTimeMillis(),
+)
+
+enum class ModelFitRating {
+    SAFE,
+    RISKY,
+    TOO_LARGE,
+}
+
+enum class ModelPerformanceTier {
+    UNKNOWN,
+    NOT_RECOMMENDED,
+    VERY_SLOW,
+    USABLE,
+    RECOMMENDED,
+}
+
+data class ModelFitEstimate(
+    val modelId: String,
+    val fileName: String,
+    val modelBytes: Long,
+    val quantization: String?,
+    val requiredRamBytes: Long,
+    val availableRamAfterUnloadBytes: Long,
+    val storageFreeBytes: Long,
+    val rating: ModelFitRating,
+    val reason: String,
+    /**
+     * True when this device has already completed a real generation with this
+     * model at >= 1 tok/s. Admission trusts proven evidence over estimates: a
+     * model that has demonstrably run is never blocked on a pessimistic memory
+     * projection (only the hard size cap still applies).
+     */
+    val provenUsable: Boolean = false,
+)
+
+data class PerformancePrediction(
+    val minTokensPerSecond: Double,
+    val maxTokensPerSecond: Double,
+    val basis: String,
+    val sampleCount: Int,
+)
+
+data class ModelPerformanceSummary(
+    val tier: ModelPerformanceTier,
+    val label: String,
+    val averageTokensPerSecond: Double?,
+    val sampleCount: Int,
+    val basedOnActualRuns: Boolean,
+)
+
+data class ModelReadiness(
+    val info: ModelStorageManager.ActiveModelInfo,
+    val fit: ModelFitEstimate,
+    val prediction: PerformancePrediction,
+    val performance: ModelPerformanceSummary,
+)

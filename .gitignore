@@ -1,0 +1,58 @@
+# Android and Gradle build output
+.gradle/
+.gradle-user/
+.kotlin/
+build/
+**/build/
+**/.cxx/
+out/
+*.class
+**/.git_backup*
+
+
+# IDE and machine-local state
+.idea/
+*.iml
+local.properties
+.DS_Store
+Thumbs.db
+
+# Signing, secrets, and packaged app outputs
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+.env
+.env.*
+*.apk
+*.aab
+release/
+validation/
+
+# Local inference/model artifacts
+*.gguf
+*.bin
+*.onnx
+*.tflite
+**/app/src/androidTest/assets/smoke-model/
+
+# Runtime logs and generated evidence
+*.log
+logcat-*.txt
+llm_host_prefs.xml
+
+# Native/intermediate outputs
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exe
+
+# Per-run plans and test outputs
+commitPlan.json
+walkthrough.md
+runs/
+*.png
+!docs/assets/*.png

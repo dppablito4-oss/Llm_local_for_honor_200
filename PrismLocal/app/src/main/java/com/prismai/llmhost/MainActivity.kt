@@ -1,0 +1,137 @@
+package com.prismai.llmhost
+import com.prismai.llmhost.*
+import com.prismai.llmhost.bridge.*
+import com.prismai.llmhost.service.*
+import com.prismai.llmhost.storage.*
+import com.prismai.llmhost.tools.*
+import com.prismai.llmhost.ui.*
+import com.prismai.llmhost.model.*
+
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.os.IBinder
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
+    private var service by mutableStateOf<InferenceService?>(null)
+    private var uiMessage by mutableStateOf<String?>(null)
+    private var isBound = false
+    private var keepServiceBoundForPicker = false
+    private var uiMessageJob: Job? = null
+
+    // Result is intentionally ignored: denial is non-fatal, notifications are
+    // simply dropped until the user grants the permission.
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            val boundService = (binder as InferenceService.LocalBinder).getService()
+            service = boundService
+            uiMessage = boundService.uiMessage.value
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "service connected uiMessage=$uiMessage")
+            }
+            uiMessageJob?.cancel()
+            uiMessageJob = lifecycleScope.launch {
+                boundService.uiMessage.collect { message ->
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, "uiMessage collected=$message")
+                    }
+                    uiMessage = message
+                }
+            }
+            isBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            uiMessageJob?.cancel()
+            uiMessageJob = null
+            service = null
+            isBound = false
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            ChatScreen(
+                service = service,
+                uiMessage = uiMessage,
+                onClearUiMessage = { message ->
+                    service?.clearUiMessage(message)
+                    if (uiMessage == message) {
+                        uiMessage = null
+                    }
+                },
+                onImportPickerStarted = {
+                    keepServiceBoundForPicker = true
+                },
+                onImportPickerFinished = {
+                    keepServiceBoundForPicker = false
+                },
+                onSwitchModel = { modelId ->
+                    lifecycleScope.launch(Dispatchers.Default) {
+                        service?.switchModel(modelId)
+                    }
+                }
+            )
+        }
+        requestNotificationPermissionIfNeeded()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        ) return
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val intent = Intent(this, InferenceService::class.java)
+        startService(intent)
+        if (!isBound) {
+            bindService(
+                intent,
+                serviceConnection,
+                Context.BIND_AUTO_CREATE
+            )
+        }
+    }
+
+    override fun onStop() {
+        if (isBound && !keepServiceBoundForPicker) {
+            uiMessageJob?.cancel()
+            uiMessageJob = null
+            unbindService(serviceConnection)
+            isBound = false
+            service = null
+        }
+        super.onStop()
+    }
+}

@@ -1,0 +1,184 @@
+# Prism Local — Code Review & Remediation Report
+
+**Date:** 2026-09-13
+**Base commit:** `590c6c2` (`main`)
+**Review branch:** `fix/swarm-review-2026-09-13`
+**Scope:** first-party code only — `app/src/main/java/com/prismai/llmhost/**`,
+`app/src/main/cpp/{Engine.cpp,Engine.hpp,llmhost_jni.cpp,CMakeLists.txt}`,
+`app/src/main/AndroidManifest.xml`, `app/build.gradle.kts`.
+Vendored `app/src/main/cpp/third_party/**` (llama.cpp / Vulkan) excluded.
+**Method:** multi-agent review swarm (4 parallel read-only reviewers for
+correctness/security/reliability/contracts) plus a 4-agent simplification search
+(reuse/quality/efficiency/clarity), then a fix team of subagents, one workstream
+per finding cluster. Findings were verified against source before fixing.
+
+> **Verification status:** this campaign was executed on a Linux host **without a
+> JDK, Gradle, or Android SDK**, so nothing here was compiled or unit-tested.
+> All changes are statically verified only. CI (`.github/workflows/android-ci.yml`)
+> is the authoritative gate and must be green before merge.
+
+---
+
+## 1. Remediation summary
+
+44 files changed (+512 / −857), 1 new test. Grouped by area.
+
+### 1.1 Correctness and reliability
+
+| # | Finding | Fix | Files |
+|---|---------|-----|-------|
+| 1 | Thread-sweep benchmark queued 4 presets but only ever ran the first; `InferenceService.benchmarkQueue` was never populated | Added `onBenchmarkComplete` hook fired from the benchmark terminal path, wired to `BenchmarkRunner.runNextQueued()`; removed the dead queue and derived status from `benchmarkRunner.queue` | `benchmark/BenchmarkRunner.kt`*, `generation/GenerationOrchestrator.kt`, `service/InferenceService.kt` |
+| 2 | Streaming rewrote `chat_index.json` and re-sorted all sessions every ~75 ms | `ChatManager.updateTranscriptMessage` no longer touches/persists the index during streaming; index persists on append/rename/delete | `chat/ChatManager.kt` |
+| 3 | Model import emitted progress per 8 KB read, each wrapped in `runBlocking { setDownloadProgress }` (~500k commits for 4 GB) | `ModelStorageManager.copyStream` throttles to ~500 ms with one guaranteed final 100 % emission | `storage/ModelStorageManager.kt`, `HuggingFaceDownloadWorker.kt` |
+| 4 | RAG ingestion/query ran native embedding + SQLite on the main thread | `NativeLlmBridge.encode` runs on `Dispatchers.Default`; `RagManager` ingest/query on `Dispatchers.IO`; `ChatScreen` launches on IO | `bridge/NativeLlmBridge.kt`, `storage/RagManager.kt`, `ui/ChatScreen.kt` |
+| 5 | Oversized chunks were silently dropped during ingestion while reporting success | Added `RagManager.IngestResult` (stored/failed/partial); `RagTools.ingestDocument` reports partial failure | `storage/RagManager.kt`, `agent/tools/RagTools.kt` |
+| 6 | `deleteModel` accepted unvalidated `model_id` and deleted `File(modelsDir, modelId)` recursively (path traversal) | Canonical `isInside(modelsDir, …)` containment check before any recursive delete; fails closed | `storage/ModelStorageManager.kt` |
+| 7 | `BackgroundAgentManager.shutdown()` was never called; and when called it cancelled its own scope before cleanup ran | Call added in `InferenceService.onDestroy()`; cleanup extracted to `performStopCleanup()`, scope cancelled only after cleanup completes; idempotent, non-blocking | `BackgroundAgentManager.kt`, `service/InferenceService.kt` |
+
+\* `BenchmarkRunner.kt` needed no change; the hook and wiring live in the
+orchestrator/service.
+
+### 1.2 Security and privacy
+
+| # | Finding | Fix | Files |
+|---|---------|-----|-------|
+| 8 | `web_search` was `risk = SAFE` (auto-executed) alongside SAFE private-data readers — injection-driven exfiltration with no gate | Raised to `CONFIRM`; added to `shouldContinueAfterTool` so confirmed searches still feed the model | `tools/AgentTools.kt`, `agent/AgentToolRouter.kt` |
+| 9 | Capability policy failed open: unmapped tools were granted | Mapped all 63 registered tools; `check()` now fails closed for unmapped names; removed stale entries; added `ToolCapabilityMappingTest` | `ToolCapabilityMapping.kt`, `tools/AgentTools.kt`, `app/src/test/.../ToolCapabilityMappingTest.kt` |
+| 10 | Attachment prompt interpolated the filename unescaped and did not neutralize the body — `</untrusted_external_content>` breakout / `[INST]` injection | Both name and body routed through `ToolInputSanitizer.sanitizeExternalInput` before wrapping | `AttachmentTextExtractor.kt` |
+| 11 | `delete_model` accepted any id string | Validates against the installed-model list; unknown ids rejected | `agent/tools/ModelTools.kt` |
+| 12 | AndroidKeyStore key spec did not allow caller-provided IVs → `encrypt()` throws on device | Added reflective `setRandomizedEncryptionRequired(false)` | `cloud/auth/KeystoreCrypto.kt` |
+| 13 | `getSecurityLevel()` reflection used the wrong parameter type (`SecretKey` vs `Key`) → always `UNKNOWN` | Use `java.security.Key` | `cloud/auth/KeystoreCrypto.kt` |
+| 14 | `TokenStorage.clearSession()`/`saveSession()` used non-durable `apply()`; tokens could survive sign-out | Use `commit()` | `cloud/auth/TokenStorage.kt` |
+| 15 | Expired session with no refresh token left the cloud backend selected with a null token | Sign out and fall back to `LOCAL_LLAMA` on unrecoverable expiry | `chat/ChatBackendManager.kt` |
+| 16 | Supabase signup with email confirmation returns no `access_token` → generic error | New `SupabaseAuthOutcome` + `EmailConfirmationRequiredException`; user-only response handled without throwing | `cloud/auth/SupabaseAuthSession.kt`, `cloud/auth/SupabaseAuthClient.kt` |
+| 17 | Auth/Prismatix HTTP clients followed redirects while carrying credentials/JWTs | `instanceFollowRedirects = false`; 3xx treated as error | `cloud/auth/SupabaseAuthClient.kt`, `cloud/prismatix/PrismatixClient.kt` |
+| 18 | Prismatix connection leaked when the request-body write threw (`isConnected` gate) | `disconnect()` now runs unconditionally in `finally` | `cloud/prismatix/PrismatixClient.kt` |
+| 19 | Prismatix inline SSE loop diverged from the unit-tested `PrismatixSseParser` (which was dead) | `streamChat` delegates to the shared parser (made `inline` to allow `emit` in the callback) | `cloud/prismatix/PrismatixClient.kt`, `cloud/prismatix/PrismatixSseParser.kt` |
+| 20 | User/agent content written to Logcat (RAG query, agent prompt/results, TTS text, search queries, UI messages) | Content logs gated behind `BuildConfig.DEBUG` or reduced to metadata | `storage/RagManager.kt`, `tools/GrokipediaClient.kt`, `KnowledgePackManager.kt`, `tools/VoiceIoManager.kt`, `BackgroundAgentManager.kt`, `MainActivity.kt` |
+
+### 1.3 Platform / contracts
+
+| # | Finding | Fix | Files |
+|---|---------|-----|-------|
+| 21 | `POST_NOTIFICATIONS` declared but never requested at runtime → notifications silently dropped on API 33+ | Runtime request via `ActivityResultContracts.RequestPermission()` | `MainActivity.kt` |
+
+### 1.4 Dead code, clarity, docs
+
+| # | Finding | Fix | Files |
+|---|---------|-----|-------|
+| 22 | Unused parallel engine abstraction (`InferenceEngine`, `LlamaCppEngineAdapter`, `MediaPipeNpuEngineAdapter`, `GrammarCompiler`) | Deleted (kept live `EngineConfigStore`) | `engine/*.kt` (4 deleted) |
+| 23 | Dead `ModelDownloadService` duplicating `HuggingFaceDownloadWorker` | Deleted + manifest entry removed | `service/ModelDownloadService.kt`, `AndroidManifest.xml` |
+| 24 | Dead Room persistence (`storage/db/*`) + dependencies + ProGuard keeps | Deleted; Room deps and keep rules removed | `storage/db/*` (5 deleted), `app/build.gradle.kts`, `app/proguard-rules.pro` |
+| 25 | `Engine.cpp` `cached_sampler` named/commented as a cache but freed every generation | Renamed `owned_sampler`, corrected comment | `app/src/main/cpp/Engine.cpp` |
+| 26 | Dead JNI `NativeDrainResult` package fallback | Removed | `app/src/main/cpp/llmhost_jni.cpp` |
+| 27 | Docs drift: `com.example.llmhost`, phantom `llm_host.cpp`, C++17 vs C++20, stale line count | Corrected against source | `PROJECT_CONTEXT.md`, `CLAUDE.md`, `AGENTS.md` |
+
+---
+
+## 2. Deferred items — all addressed
+
+The original deferred list (D1–D8) has now been fully worked through across two
+follow-up passes:
+
+- **D2, D4, D5** — first follow-up pass; see §5.
+- **D1, D3, D6, D7, D8** — second follow-up pass (parallel subagent team); see §6.
+
+Every follow-up change was static-review-only on a host without a JDK, Gradle, or
+Android SDK. CI (`.github/workflows/android-ci.yml`) remains the authoritative
+gate and must be green before merge; D3 in particular still needs on-device
+verification (see §6).
+
+---
+
+## 3. Cross-repo comparison
+
+- **GitHub:** PR #1 (`feat(cloud): AndroidKeyStore token encryption and Cloud Chat
+  substrate`) is **merged**; `origin/feat/cloud-chat-keystore-auth` is
+  content-identical to `main`. No unfixed code hidden there. The merged
+  `fix(security): correct KeyProperties constants` is accurate (verified against
+  AOSP) and was not reopened.
+- **Babel (agent harness):** applied the `06_Task_Overlays/AI-Android-Development-v1.md`
+  review contract, `SECURITY.md`, `tools/security/policy.json`, and
+  `skills/android-testing-strategy`. This surfaced the additional issues in §2
+  (D1, D2, D3, D4, D5, D8) and confirmed lifecycle-aware state collection and
+  test routing are correct.
+
+---
+
+## 4. Verification
+
+- Static review only on this host (no JDK/Gradle/Android SDK).
+- Required gate before merge:
+  - `./gradlew :app:testDevDebugUnitTest :app:testPlayDebugUnitTest --no-daemon`
+  - `./gradlew :app:assembleDevBenchmark :app:assemblePlayRelease --no-daemon`
+  - or `./scripts/verify.ps1` on Windows.
+- Highest-risk-to-compile changes: the `inline` `PrismatixSseParser.parseStream`
+  + `emit` pattern, the `withContext` wrappers in `NativeLlmBridge`/`RagManager`,
+  and the reflective Keystore calls.
+
+---
+
+## 5. Follow-up pass (2026-09-13): D2, D4, D5
+
+Same host constraints as §1 — no JDK, Gradle, or Android SDK — so these changes
+are static-review-only. Two new pure-JVM unit tests cover the extracted helpers.
+
+| # | Issue | Fix | Files |
+|---|-------|-----|-------|
+| D2 | `VectorStore.search` materialized every row (text + embedding BLOB) on the heap under a global lock | `search` now streams the cursor and retains only the top-K in a bounded min-heap via a new testable `selectTopK`; the full table is never materialized | `storage/VectorStore.kt`, `app/src/test/.../storage/VectorStoreTopKTest.kt` |
+| D5 | Unbounded `readText()` on remote response bodies | New `readTextBounded` (fail-closed) and `readTextTruncated` (diagnostic) reader extensions; applied to Grokipedia, DuckDuckGo search, HF search/metadata, Supabase auth, and Prismatix error bodies | `util/RemoteResponseText.kt`, `tools/GrokipediaClient.kt`, `agent/tools/WebSearchTools.kt`, `model/HuggingFaceSearchEngine.kt`, `HuggingFaceDownloadWorker.kt`, `cloud/auth/SupabaseAuthClient.kt`, `cloud/prismatix/PrismatixClient.kt`, `app/src/test/.../util/RemoteResponseTextTest.kt` |
+| D4 | Dev permits cleartext `localhost`/`127.0.0.1`/`10.0.2.2` but no network-security-config exists, and targetSdk 36 blocks cleartext | Added a `dev`-flavor manifest + network security config allowing cleartext only for those three hosts; the `play` flavor ships no config, so cleartext stays blocked | `app/src/dev/AndroidManifest.xml`, `app/src/dev/res/xml/network_security_config.xml` |
+
+Notes / residual risk:
+
+- D2 no longer preserves stable ordering among exactly-equal scores (the old code
+  used a stable sort after loading all rows). The top-K *set* is identical; ties
+  are semantically unordered for retrieval.
+- D4 is scoped to the `dev` **flavor**, not only the `debug` build type, because
+  `developerWorkMode` and the localhost allowance are flavor properties and
+  `devRelease` needs them too. `play*` builds remain cleartext-blocked.
+  Not compile/device-verified here.
+- D5's `HuggingFaceDownloadWorker.openTextConnection` cap now also covers API
+  metadata that was previously read with an unbounded `readText()`; an oversized
+  body fails the metadata fetch and falls back to catalog values via the existing
+  `runCatching`.
+- Follow-up tests to run with the rest of the gate:
+  `RemoteResponseTextTest`, `VectorStoreTopKTest`.
+
+---
+
+## 6. Second follow-up pass (2026-09-14): D1, D3, D6, D7, D8
+
+Executed as a parallel team of five subagents, one per issue, each in an isolated
+git worktree/branch (based on the first follow-up branch) to avoid collisions;
+the reviewed commits were then cherry-picked onto the same branch. Same host
+constraints as §1/§5 — static-review-only, no JDK/Gradle/Android SDK.
+
+| # | Issue | Fix | Files |
+|---|-------|-----|-------|
+| D1 | HF integrity could be silently skipped: `expectedSha256 ?: return`, only 3/25 curated entries pinned, and the reader looked for `lfs.oid` though the API now exposes `lfs.sha256` | New pure `decideDownloadIntegrity`: valid 64-hex → verify; curated + no hash → **fail closed** before download; dynamic + no hash → import but surface as unverified. Pinned 14 more curated SHA-256s (re-verified against the HF API), fixed the `lfs.sha256` read, and threaded `integrityVerified` through state/UI/tools | `DownloadIntegrityPolicy.kt`, `HuggingFaceDownloadWorker.kt`, `HuggingFaceModelCatalog.kt`, `model/ModelDownloadManager.kt`, `model/HuggingFaceSearchEngine.kt`, `agent/tools/ModelTools.kt`, `ui/ChatScreen.kt`, `ui/controlplane/ControlPlaneSheet.kt`, `app/src/test/.../DownloadIntegrityPolicyTest.kt` |
+| D3 | `onDestroy` ran `runBlocking { … engine.destroySafely() }` on the main thread (ANR risk) | Teardown moved to a dedicated, intentionally non-cancelled `Dispatchers.IO` scope; the main thread waits at most **2 s** and returns; the job keeps running on overrun so the native free still completes. `AtomicBoolean` reentrancy guard; `destroySafely()` remains idempotent | `service/InferenceService.kt` |
+| D6 | `WorkspaceTools` was rooted at all of `filesDir`, so SAFE reads reached chats/traces/audit log | Dedicated `filesDir/agent-workspace` root (created + boundary README). Tools are read-only and have never had a write tool, so no migration is needed; legacy data is simply no longer agent-reachable. Containment tests added | `agent/tools/WorkspaceTools.kt`, `service/InferenceService.kt`, `app/src/test/.../agent/tools/WorkspaceToolsTest.kt`, `app/src/test/.../work/WorkspaceJailTest.kt` |
+| D7 | Broad reuse duplication | Conservative subset only: one canonical byte-size formatter and one `ByteArray.toHex`. Non-equivalent atomic-write/SHA/registry patterns were deliberately **not** merged (documented) to avoid behavior changes without a build | `util/ByteUtils.kt`, `ui/UiFormatUtils.kt`, `AttachmentTextExtractor.kt`, `storage/ModelStorageManager.kt`, `app/src/test/.../util/ByteUtilsTest.kt` |
+| D8 | Babel public-export policy hits: Windows/machine-local host paths and `.supabase.co` | Sanitized host paths in docs to `<workspace>`/env-var placeholders and repaired a stale doc link; confirmed `prismatix-router.supabase.co` is an exact-string pin (not a wildcard) and documented why it stays | `AGENTS.md`, `CLAUDE.md`, `PROJECT_CONTEXT.md`, `SIGNING.md`, `ADVERSARIAL_CRITIQUE_PROMPT.md`, `UI_AUDIT_PROMPT.md`, `ROADMAP.md`, `STATUS.md`, `gradle.properties`, `docs/evidence/*`, `cloud/prismatix/PrismatixConfig.kt` |
+
+Notes / residual risk:
+
+- **D1:** the 14 new pins were independently re-verified against the HF API
+  (`lfs.sha256`, 14/14 matched). Six curated entries remain unpinned (three gated
+  repos return HTTP 401; three stale file names return 404) and now fail closed
+  instead of importing unverified. `createCustomEntry`/search-derived imports are
+  marked `curated = false`. An in-flight WorkManager job from a build lacking the
+  new `KEY_INTEGRITY` is treated as unverified (fail-safe).
+- **D3:** device verification **NOT RUN**. Must be checked on a device: no ANR
+  under active generation, the timeout path frees the handle, and rebinding a new
+  service after destroy is use-after-free-safe.
+- **D6:** intentional behavior change — anything previously reachable under
+  `filesDir` is no longer agent-readable; chats remain available via the dedicated
+  chat tools.
+- **D7:** a scoped subset by design; duplicated file/SHA/tool-registry patterns
+  were intentionally left in place as not provably equivalent.
+- **D8:** the `supabase.co` substring remains by design (exact host pin, never a
+  wildcard); if the policy scanner keys on the substring rather than wildcard
+  usage, removing the host is a product decision with runtime impact.
+- New tests: `DownloadIntegrityPolicyTest`, `WorkspaceToolsTest`, `ByteUtilsTest`.

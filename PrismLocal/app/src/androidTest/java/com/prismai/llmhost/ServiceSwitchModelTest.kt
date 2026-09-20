@@ -183,6 +183,110 @@ class ServiceSwitchModelTest {
     }
 
     @Test
+    fun modelSwitchKeepsChatAndPersistsContinuedConversation() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val targetContext = instrumentation.targetContext
+        stageModel(instrumentation, "modelContextA")
+        stageModel(instrumentation, "modelContextB")
+
+        val service = bindService(targetContext)
+        try {
+            prepareEmptyChat(service.service)
+            assertTrue(service.service.switchModel("modelContextA"))
+
+            val firstPrompt = "Remember the durable code word ORCHID"
+            service.service.generateSafely(firstPrompt)
+            val beforeSwitch = waitForContinuedTranscript(
+                service = service.service,
+                previousLastId = 0L,
+                expectedUserPrompt = firstPrompt,
+            )
+            val chatId = service.service.currentChatId.value
+            assertTrue("expected an active chat id", chatId != null)
+
+            assertTrue(service.service.switchModel("modelContextB"))
+            assertEquals(chatId, service.service.currentChatId.value)
+            assertEquals(beforeSwitch, service.service.transcript.value)
+
+            val secondPrompt = "What was the durable code word?"
+            service.service.generateSafely(secondPrompt)
+            val continued = waitForContinuedTranscript(
+                service = service.service,
+                previousLastId = beforeSwitch.maxOf { it.id },
+                expectedUserPrompt = secondPrompt,
+            )
+
+            assertTrue(continued.any { it.role == TranscriptRole.USER && it.text == firstPrompt })
+            assertTrue(continued.any { it.role == TranscriptRole.USER && it.text == secondPrompt })
+            val preparedForSecondModel = requireNotNull(service.service.preparedContext.value)
+            assertEquals("modelContextB", preparedForSecondModel.modelId)
+            assertEquals(
+                com.prismai.llmhost.generation.TokenCountSource.NATIVE_TOKENIZER,
+                preparedForSecondModel.tokenCountSource,
+            )
+            assertTrue(
+                "model B did not receive the durable history",
+                preparedForSecondModel.messages.any { it.content == firstPrompt },
+            )
+            assertEquals(secondPrompt, preparedForSecondModel.messages.last().content)
+
+            val transcriptFile = File(File(targetContext.filesDir, "chats"), "$chatId.json")
+            assertTrue(
+                "continued transcript was not flushed to disk",
+                waitForFileText(transcriptFile, firstPrompt, secondPrompt),
+            )
+        } finally {
+            service.service.cancelGeneration()
+            targetContext.unbindService(service.connection)
+        }
+    }
+
+    @Test
+    fun switchingChatsRestoresIsolatedTranscripts() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val targetContext = instrumentation.targetContext
+        stageModel(instrumentation, "modelChatIsolation")
+
+        val service = bindService(targetContext)
+        try {
+            prepareEmptyChat(service.service)
+            assertTrue(service.service.switchModel("modelChatIsolation"))
+
+            val firstPrompt = "This belongs only to chat ALPHA"
+            service.service.generateSafely(firstPrompt)
+            waitForContinuedTranscript(
+                service = service.service,
+                previousLastId = 0L,
+                expectedUserPrompt = firstPrompt,
+            )
+            val firstChatId = requireNotNull(service.service.currentChatId.value)
+
+            val secondChatId = service.service.createChat()
+            assertTrue(secondChatId.isNotBlank())
+            assertTrue(service.service.transcript.value.isEmpty())
+
+            val secondPrompt = "This belongs only to chat BETA"
+            service.service.generateSafely(secondPrompt)
+            waitForContinuedTranscript(
+                service = service.service,
+                previousLastId = 0L,
+                expectedUserPrompt = secondPrompt,
+            )
+
+            assertTrue(service.service.switchChat(firstChatId))
+            assertTrue(service.service.transcript.value.any { it.text == firstPrompt })
+            assertTrue(service.service.transcript.value.none { it.text == secondPrompt })
+
+            assertTrue(service.service.switchChat(secondChatId))
+            assertTrue(service.service.transcript.value.any { it.text == secondPrompt })
+            assertTrue(service.service.transcript.value.none { it.text == firstPrompt })
+        } finally {
+            service.service.cancelGeneration()
+            targetContext.unbindService(service.connection)
+        }
+    }
+
+    @Test
     fun generationSettingsReachRuntimeAndPublishPerformance() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val targetContext = instrumentation.targetContext
@@ -355,6 +459,51 @@ class ServiceSwitchModelTest {
             delay(20)
         }
         return service.transcript.value
+    }
+
+    private suspend fun prepareEmptyChat(service: InferenceService) {
+        service.cancelGeneration()
+        assertTrue("previous generation did not stop", waitForGenerating(service, expected = false))
+        service.clearTranscript()
+        repeat(100) {
+            if (service.transcript.value.isEmpty()) return
+            delay(10)
+        }
+        assertTrue("transcript was not cleared", service.transcript.value.isEmpty())
+    }
+
+    private suspend fun waitForContinuedTranscript(
+        service: InferenceService,
+        previousLastId: Long,
+        expectedUserPrompt: String,
+    ): List<TranscriptMessage> {
+        repeat(500) {
+            val transcript = service.transcript.value
+            val hasNewUser = transcript.any { message ->
+                message.id > previousLastId &&
+                    message.role == TranscriptRole.USER &&
+                    message.text == expectedUserPrompt
+            }
+            val hasNewAssistant = transcript.any { message ->
+                message.id > previousLastId &&
+                    message.role == TranscriptRole.ASSISTANT &&
+                    message.text.isNotBlank()
+            }
+            if (hasNewUser && hasNewAssistant && !service.isGenerating.value) {
+                return transcript
+            }
+            delay(20)
+        }
+        return service.transcript.value
+    }
+
+    private suspend fun waitForFileText(file: File, vararg expected: String): Boolean {
+        repeat(200) {
+            val text = runCatching { if (file.isFile) file.readText() else "" }.getOrDefault("")
+            if (expected.all(text::contains)) return true
+            delay(10)
+        }
+        return false
     }
 
     private suspend fun waitForPerformance(service: InferenceService): GenerationPerformance {

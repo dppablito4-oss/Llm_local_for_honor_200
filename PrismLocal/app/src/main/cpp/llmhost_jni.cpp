@@ -400,6 +400,41 @@ Java_com_prismai_llmhost_bridge_NativeLlmBridge_nativeStartGenerationChat(
     }
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_prismai_llmhost_bridge_NativeLlmBridge_nativeCountChatTokens(
+    JNIEnv* env,
+    jobject,
+    jlong handle,
+    jobjectArray roles,
+    jobjectArray contents) {
+    auto* engine = toEngine(handle);
+    if (engine == nullptr || roles == nullptr || contents == nullptr) {
+        return -1;
+    }
+    const jsize roles_len = env->GetArrayLength(roles);
+    const jsize contents_len = env->GetArrayLength(contents);
+    if (roles_len <= 0 || roles_len != contents_len) {
+        return -1;
+    }
+    try {
+        std::vector<llmhost::ChatMessage> messages;
+        messages.reserve(static_cast<size_t>(roles_len));
+        for (jsize i = 0; i < roles_len; ++i) {
+            auto role_jstr = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
+            auto content_jstr = static_cast<jstring>(env->GetObjectArrayElement(contents, i));
+            llmhost::ChatMessage message;
+            message.role = toString(env, role_jstr);
+            message.content = toString(env, content_jstr);
+            if (role_jstr != nullptr) env->DeleteLocalRef(role_jstr);
+            if (content_jstr != nullptr) env->DeleteLocalRef(content_jstr);
+            messages.push_back(std::move(message));
+        }
+        return engine->countChatTokens(messages);
+    } catch (const std::exception&) {
+        return -1;
+    }
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_prismai_llmhost_bridge_NativeLlmBridge_nativeRunBenchmark(
     JNIEnv* env,

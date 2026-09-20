@@ -10,7 +10,6 @@ import com.prismai.llmhost.model.*
 import com.prismai.llmhost.MemoryRetriever
 import com.prismai.llmhost.TranscriptMessage
 import com.prismai.llmhost.TranscriptRole
-import java.util.ArrayDeque
 
 /**
  * Builds prompt strings for the generation engine by assembling system
@@ -38,42 +37,15 @@ class PromptBuilder(
             activeAssistantTranscriptId: Long?,
             memoryContext: String,
             tokenBudget: Int,
-        ): List<ChatMessage> {
-            val system = buildString {
-                append(SYSTEM_PROMPT)
-                if (memoryContext.isNotBlank()) {
-                    append("\n\n")
-                    append(memoryContext)
-                }
-            }
-            val history = transcript.filter { message ->
-                message.text.isNotBlank() && message.id != activeAssistantTranscriptId
-            }
-            val selected = ArrayDeque<TranscriptMessage>()
-            var estimatedTokens = (newPrompt.length + memoryContext.length) / 4
-            for (message in history.asReversed()) {
-                val tokens = message.toChatMessage().content.length / 4
-                if (estimatedTokens + tokens <= tokenBudget || selected.isEmpty()) {
-                    selected.addFirst(message)
-                    estimatedTokens += tokens
-                } else {
-                    break
-                }
-            }
-            val messages = ArrayList<ChatMessage>(selected.size + 2)
-            messages += ChatMessage(ChatMessage.ROLE_SYSTEM, system)
-            selected.forEach { message -> messages += message.toChatMessage() }
-            messages += ChatMessage(ChatMessage.ROLE_USER, newPrompt)
-            return messages
-        }
-
-        private fun TranscriptMessage.toChatMessage(): ChatMessage =
-            when (role) {
-                TranscriptRole.USER -> ChatMessage(ChatMessage.ROLE_USER, text)
-                TranscriptRole.ASSISTANT -> ChatMessage(ChatMessage.ROLE_ASSISTANT, text)
-                TranscriptRole.TOOL ->
-                    ChatMessage(ChatMessage.ROLE_USER, "[tool result] ${if (text.isBlank()) summary.orEmpty() else text}")
-            }
+            systemPrompt: String? = SYSTEM_PROMPT,
+        ): List<ChatMessage> = ContextBuilder.prepare(
+            newPrompt = newPrompt,
+            transcript = transcript,
+            activeAssistantTranscriptId = activeAssistantTranscriptId,
+            memoryContext = memoryContext,
+            promptTokenBudget = tokenBudget,
+            systemPrompt = systemPrompt,
+        ).messages
     }
 
     // ── Memory context ──────────────────────────────────────────────────
@@ -150,12 +122,40 @@ class PromptBuilder(
         activeAssistantTranscriptId: Long?,
         memoryContext: String = "",
         tokenBudget: Int = DEFAULT_TOKEN_BUDGET,
+        includeSystemPrompt: Boolean = true,
     ): List<ChatMessage> = assembleChatMessages(
         newPrompt = newPrompt,
         transcript = transcript,
         activeAssistantTranscriptId = activeAssistantTranscriptId,
         memoryContext = memoryContext,
         tokenBudget = tokenBudget,
+        systemPrompt = SYSTEM_PROMPT.takeIf { includeSystemPrompt },
+    )
+
+    fun prepareContext(
+        newPrompt: String,
+        transcript: List<TranscriptMessage>,
+        activeAssistantTranscriptId: Long?,
+        memoryContext: String = "",
+        ragContext: String = "",
+        summaryContext: String = "",
+        tokenBudget: Int = DEFAULT_TOKEN_BUDGET,
+        contextLength: Int = tokenBudget,
+        reservedOutputTokens: Int = 0,
+        reservedTemplateTokens: Int = 0,
+        includeSystemPrompt: Boolean = true,
+    ): PreparedContext = ContextBuilder.prepare(
+        newPrompt = newPrompt,
+        transcript = transcript,
+        activeAssistantTranscriptId = activeAssistantTranscriptId,
+        memoryContext = memoryContext,
+        ragContext = ragContext,
+        summaryContext = summaryContext,
+        promptTokenBudget = tokenBudget,
+        contextLength = contextLength,
+        reservedOutputTokens = reservedOutputTokens,
+        reservedTemplateTokens = reservedTemplateTokens,
+        systemPrompt = SYSTEM_PROMPT.takeIf { includeSystemPrompt },
     )
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ class PromptBuilder(
     private fun TranscriptMessage.asPromptLine(): String =
         when (role) {
             TranscriptRole.USER -> "User: $text"
-            TranscriptRole.ASSISTANT -> "Assistant: $text"
+            TranscriptRole.ASSISTANT -> "Assistant: ${ReasoningOutputParser.answerForHistory(text)}"
             TranscriptRole.TOOL -> summary?.let { "Tool: $it" } ?: "Tool: $text"
         }
 }

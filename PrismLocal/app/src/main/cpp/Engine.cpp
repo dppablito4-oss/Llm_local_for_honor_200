@@ -1719,6 +1719,48 @@ int Engine::startGenerationChat(const std::vector<ChatMessage>& messages, int ge
     return impl_->startSessionInternal("", messages, generation_id, config);
 }
 
+int Engine::countChatTokens(const std::vector<ChatMessage>& messages) {
+    if (!impl_ || messages.empty()) {
+        return -1;
+    }
+
+    std::shared_ptr<ModelRuntime> runtime;
+    {
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        runtime = impl_->active_runtime;
+    }
+    if (!runtime || runtime->model == nullptr || runtime->vocab == nullptr) {
+        return -1;
+    }
+
+    std::lock_guard<std::mutex> decode_lock(runtime->decode_mu);
+    const std::string formatted = formatMessagesForGeneration(runtime->model, messages, "");
+    if (formatted.empty()) {
+        return -1;
+    }
+
+    bool add_special = (runtime->current_position == 0) || !runtime->conversation.valid;
+    if (formatted.rfind("<s>", 0) == 0 ||
+        formatted.rfind("<|im_start|>", 0) == 0 ||
+        formatted.rfind("<|start_header_id|>", 0) == 0 ||
+        formatted.rfind("<|begin_of_text|>", 0) == 0 ||
+        formatted.rfind("[INST]", 0) == 0) {
+        add_special = false;
+    }
+
+    const int32_t result = llama_tokenize(
+        runtime->vocab,
+        formatted.c_str(),
+        static_cast<int32_t>(formatted.size()),
+        nullptr,
+        0,
+        add_special,
+        true);
+    const int count = result < 0 ? -result : result;
+    LOGI("chat_token_count messages=%zu formatted_bytes=%zu tokens=%d", messages.size(), formatted.size(), count);
+    return count > 0 ? count : -1;
+}
+
 std::string Engine::runBenchmark(GenerationConfig config, int prompt_tokens, int generation_tokens, int repetitions) {
     if (!impl_) {
         return "{}";

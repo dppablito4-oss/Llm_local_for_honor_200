@@ -45,9 +45,13 @@ internal fun RuntimeControls(
     performance: GenerationPerformance?,
     enabled: Boolean,
     deviceCapabilityProfile: DeviceCapabilityProfile?,
+    currentModel: String?,
     onSettingsChange: (GenerationSettings) -> Unit,
 ) {
     var advancedVisible by remember { mutableStateOf(false) }
+    val behavior = remember(currentModel) { ModelBehaviorProfiles.resolve(currentModel) }
+    val supportsReasoning = behavior.reasoningCapability != ReasoningCapability.NONE
+    val reasoningEnabled = behavior.isReasoningEnabled(settings.reasoningMode)
     DashboardCard {
         SectionHeader(
             title = "Motor de inferencia",
@@ -77,6 +81,89 @@ internal fun RuntimeControls(
                 onSettingsChange(settings.copy(threadCount = value.roundToInt()))
             },
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Modo de razonamiento",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = when (behavior.reasoningCapability) {
+                        ReasoningCapability.TOGGLEABLE ->
+                            "Qwen3 puede alternar entre chat rápido y thinking. Al activarlo se usan 768 tokens de salida como mínimo."
+                        ReasoningCapability.ALWAYS_ON ->
+                            if (behavior.key == "deepseek_r1") {
+                                "Thinking siempre activo. La versión 1.5B es experimental: puede divagar o mezclar idiomas; para chat factual usa Qwen3."
+                            } else {
+                                "Este modelo razona siempre. Se recomienda contexto 4096 y al menos 768 tokens de salida."
+                            }
+                        ReasoningCapability.NONE ->
+                            "El modelo seleccionado no declara un modo thinking compatible."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (behavior.reasoningCapability == ReasoningCapability.TOGGLEABLE) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ReasoningModeChoice(
+                        label = "Normal",
+                        selected = settings.reasoningMode == ReasoningMode.NORMAL,
+                        enabled = enabled,
+                        onClick = {
+                            onSettingsChange(behavior.settingsForMode(settings, ReasoningMode.NORMAL))
+                        },
+                    )
+                    ReasoningModeChoice(
+                        label = "Thinking",
+                        selected = settings.reasoningMode == ReasoningMode.THINKING,
+                        enabled = enabled,
+                        onClick = {
+                            onSettingsChange(behavior.settingsForMode(settings, ReasoningMode.THINKING))
+                        },
+                    )
+                }
+            } else {
+                Switch(
+                    checked = reasoningEnabled,
+                    onCheckedChange = null,
+                    enabled = false,
+                )
+            }
+        }
+        if (supportsReasoning && (
+                settings.contextLength < ModelBehaviorProfile.RECOMMENDED_REASONING_CONTEXT ||
+                    settings.maxTokens < ModelBehaviorProfile.RECOMMENDED_REASONING_MAX_TOKENS
+                )
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                color = PrismViolet.copy(alpha = 0.10f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                border = BorderStroke(1.dp, PrismViolet.copy(alpha = 0.30f)),
+                onClick = {
+                    if (enabled) onSettingsChange(behavior.recommendedSettings(settings))
+                },
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        text = "Aplicar perfil recomendado",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Contexto 4096 · salida 768 · temperatura 0.60 · Top P 0.95 · Top K 20",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -258,6 +345,34 @@ private fun snapTokens(value: Float): Int {
 
 private fun snapStep(value: Float, step: Int): Int =
     ((value / step).roundToInt() * step)
+
+@Composable
+private fun ReasoningModeChoice(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) PrismViolet.copy(alpha = 0.22f) else PrismGlass.copy(alpha = 0.28f),
+        contentColor = if (selected) PrismText else MaterialTheme.colorScheme.onSurfaceVariant,
+        border = BorderStroke(
+            1.dp,
+            if (selected) PrismViolet.copy(alpha = 0.65f) else PrismGlassBorder.copy(alpha = 0.30f),
+        ),
+        onClick = { if (enabled) onClick() },
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (enabled) androidx.compose.ui.graphics.Color.Unspecified
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        )
+    }
+}
 
 @Composable
 private fun SettingSlider(

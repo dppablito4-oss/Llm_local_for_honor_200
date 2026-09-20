@@ -9,7 +9,6 @@ import com.prismai.llmhost.model.*
 import com.prismai.llmhost.*
 import com.prismai.llmhost.chat.ChatManager
 import com.prismai.llmhost.chat.ChatSearchIndex
-import com.prismai.llmhost.chat.TranscriptStore
 import com.prismai.llmhost.export.ChatExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,7 +20,6 @@ import java.util.Locale
 class ChatTools(
     private val chatManager: ChatManager,
     private val chatSearchIndex: ChatSearchIndex,
-    private val transcriptStore: TranscriptStore,
     private val currentChatId: () -> String?,
     private val chatSessions: () -> List<ChatSession>,
     private val transcript: () -> List<TranscriptMessage>,
@@ -89,11 +87,11 @@ class ChatTools(
                 val haystack = chatSearchIndex.get(session.id) ?: buildString {
                     append(session.title)
                     append(' ')
-                    transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(session.id)).forEach { append(it.text).append(' ') }
+                    chatManager.messagesForChat(session.id).forEach { append(it.text).append(' ') }
                 }.lowercase(Locale.US)
                 val score = terms.count { it in haystack } + if (query.lowercase(Locale.US) in session.title.lowercase(Locale.US)) 2 else 0
                 if (score <= 0) null else {
-                    val messages = transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(session.id))
+                    val messages = chatManager.messagesForChat(session.id)
                     Triple(session, messages, score)
                 }
             }.sortedByDescending { it.third }.take(limit)
@@ -124,7 +122,7 @@ class ChatTools(
         val session = chatSessions().firstOrNull { it.id == chatId }
             ?: return toolFailure(call, AgentToolErrorCode.NOT_FOUND, "Chat not found")
         val messages = withContext(Dispatchers.IO) {
-            transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(session.id))
+            chatManager.messagesForChat(session.id)
         }
         val format = call.arguments.optString("format", "markdown").lowercase(Locale.US)
         val extension = when (format) { "json" -> "json"; "text", "txt" -> "txt"; else -> "md" }

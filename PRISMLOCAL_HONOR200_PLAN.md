@@ -1,15 +1,25 @@
 # PrismLocal en Honor 200 --- Plan de adopción, pruebas y optimización
 
-**Estado:** Documento inicial de trabajo\
-**Versión:** 0.1\
+**Estado:** Actualizado después de auditoría del código real\
+**Versión:** 0.3\
 **Dispositivo objetivo inicial:** Honor 200 (12 GB RAM / 256 GB
 almacenamiento / Snapdragon 7 Gen 3 / Android 16 / MagicOS 10)\
 **Repositorio base:** https://github.com/gthgomez/PrismLocal\
 **Motor de inferencia:** `llama.cpp` integrado por PrismLocal\
-**Objetivo de esta etapa:** partir de un proyecto funcional, ejecutarlo
-sin modificaciones, caracterizar su comportamiento real en el Honor 200
-y modificarlo progresivamente solo cuando los datos obtenidos lo
-justifiquen.
+**Objetivo de esta etapa:** evolucionar el proyecto ya compilado y probado
+en el Honor 200 hacia chat persistente, contexto largo controlado, memoria
+aislada y RAG documental, conservando las optimizaciones de inferencia que
+ya funcionan.
+
+> **Corrección de auditoría (19 de septiembre de 2026):** el proyecto ya fue
+> clonado, compilado, instalado y probado con modelos reales. Room es ahora la
+> fuente de verdad de chats y mensajes; JSON se regenera solo como respaldo.
+> También se completó `ContextBuilder`, incluido el conteo con el tokenizer del
+> GGUF activo. Memoria de largo plazo y vectores siguen en bases SQLite separadas.
+> RAG puede almacenar y consultar fragmentos, pero aún no se inyecta en el chat
+> normal. El estado y destino detallados están en
+> `PrismLocal/docs/architecture/current-state.md` y
+> `PrismLocal/docs/architecture/target-state.md`.
 
 ------------------------------------------------------------------------
 
@@ -433,10 +443,13 @@ consumo
 
 # 13. Persistencia local
 
-PrismLocal incluye persistencia local para conversaciones.
+PrismLocal persiste chats y mensajes en Room mediante `prismlocal.db`.
+`chat_index.json` y `chats/<chatId>.json` se regeneran de forma asíncrona como
+respaldo de recuperación, pero ya no gobiernan el arranque ni las lecturas.
 
-También dispone de infraestructura Room/SQLite relacionada con su
-sistema de recuperación documental.
+La memoria de largo plazo utiliza `prism_memory.db` y los fragmentos vectoriales
+utilizan `prism_vector_store.db`, ambas mediante `SQLiteOpenHelper`. Su migración
+y aislamiento se mantienen pendientes para no mezclar cambios de riesgo.
 
 Esto resulta adecuado para nuestro objetivo de mantener los datos
 principalmente dentro del dispositivo.
@@ -472,10 +485,13 @@ contexto para el LLM
 respuesta
 ```
 
-La documentación actual describe un almacenamiento vectorial local
-basado en SQLite/Room y similitud coseno.
+La implementación actual contiene `RagManager`, fragmentación, embeddings,
+almacenamiento SQLite y búsqueda por similitud coseno. Sin embargo,
+`buildRagContext()` todavía no participa en la generación normal. Tampoco hay
+documentos, colecciones, páginas, citas ni relación chat-documento.
 
-No intentaremos reemplazarlo al principio.
+No reemplazaremos el almacenamiento vectorial al principio. Primero añadiremos
+metadatos, aislamiento y conexión con el constructor de contexto.
 
 Primero comprobaremos:
 
@@ -1230,6 +1246,10 @@ El punto óptimo puede no ser la cuantización de mayor precisión.
 Solo después de tener inferencia estable comenzaremos a evaluar y
 mejorar el RAG existente.
 
+La inferencia ya es estable en el Honor 200. Antes de medir calidad RAG hay que
+conectar la recuperación al chat y evitar que los documentos de una colección
+se filtren a otra.
+
 Primero:
 
 ``` text
@@ -1430,8 +1450,8 @@ Durante la etapa baseline:
 NO cambiar llama.cpp
 NO reescribir JNI
 NO cambiar arquitectura
-NO reemplazar Room
-NO reemplazar RAG
+NO hacer una migración masiva de todas las bases en un solo cambio
+NO eliminar VectorStore antes de medir su límite real
 NO cambiar governor térmico
 NO activar NPU experimental
 NO hacer router multimodelo
@@ -1451,20 +1471,20 @@ Primero queremos saber:
 Después del baseline:
 
 ``` text
-1. Compatibilidad Honor 200
-2. Instrumentación
-3. Benchmark
-4. Configuración CPU
-5. GPU
-6. Contexto/KV
-7. Model Manager
-8. RAG
-9. Citas
-10. UI
-11. perfiles especializados
-12. router
-13. herramientas
-14. NPU experimental
+1. Documentar estado real y arquitectura objetivo — COMPLETADO
+2. Pruebas de persistencia y cambio de modelo — COMPLETADO
+3. Room para chats y mensajes con importación de JSON — COMPLETADO
+4. ContextBuilder y presupuesto por secciones — COMPLETADO
+5. Resumen acumulativo de conversaciones largas
+6. Aislamiento de memoria global/por chat
+7. RAG conectado al chat y filtrado por colecciones
+8. PDF textual por páginas
+9. OCR opcional y citas
+10. Métricas y presupuesto integral de RAM
+11. Benchmark sostenido de la arquitectura completa
+12. GPU/Vulkan experimental
+13. Visión/multimodal
+14. NPU/Hexagon experimental
 ```
 
 ------------------------------------------------------------------------
@@ -1739,19 +1759,21 @@ benchmark.
 
 ## Próximo paso operativo
 
-El siguiente trabajo ya no consiste en diseñar más funciones.
+El baseline, la compilación, la instalación y las primeras pruebas de modelos
+ya se completaron. Al cierre de la sesión del 19 de septiembre también quedaron
+terminados Room, cambio de modelo sin perder el chat, reconstrucción del contexto
+con el tokenizer activo y selección Normal/Thinking para Qwen3 híbrido.
 
-Es:
+El siguiente bloque, deliberadamente pendiente, es:
 
 ``` text
-1. preparar entorno
-2. clonar PrismLocal con submódulos
-3. guardar commit exacto
-4. compilar sin tocar código
-5. instalar upstream puro en Honor 200
-6. ejecutar smoke test
-7. registrar primer baseline
+1. resumen acumulativo de conversaciones largas
+2. memoria de largo plazo GLOBAL/CHAT con aislamiento explícito
+3. extracción de memoria sugerida y confirmable
+4. RAG conectado al chat y filtrado por colecciones
+5. PDF textual por páginas y citas
 ```
 
-Hasta completar estos siete pasos, **no se realizará ninguna
-optimización específica para el Snapdragon 7 Gen 3**.
+Hasta implementar el aislamiento, la memoria automática no se considera parte
+del producto base. RAG tampoco se anunciará como terminado aunque su almacén y
+búsqueda ya existan.

@@ -427,12 +427,14 @@ class HuggingFaceDownloadWorker(
     }
 }
 
-fun enqueueHuggingFaceDownload(context: Context, entryId: String) {
+fun enqueueHuggingFaceDownload(context: Context, entryId: String): java.util.UUID {
+    val request = HuggingFaceDownloadWork.request(entryId)
     WorkManager.getInstance(context).enqueueUniqueWork(
         HuggingFaceDownloadWork.UNIQUE_WORK_NAME,
         ExistingWorkPolicy.KEEP,
-        HuggingFaceDownloadWork.request(entryId),
+        request,
     )
+    return request.id
 }
 
 private fun cleanupStalePartialFiles(downloadsDir: File, maxAgeMs: Long = 24 * 3600 * 1000L) {

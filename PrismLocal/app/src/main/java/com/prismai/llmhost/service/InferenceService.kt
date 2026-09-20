@@ -30,6 +30,7 @@ import androidx.core.app.NotificationCompat
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +74,9 @@ import com.prismai.llmhost.model.ModelReadinessAssessor
 import com.prismai.llmhost.generation.GenerationMetrics
 import com.prismai.llmhost.generation.GenerationOrchestrator
 import com.prismai.llmhost.generation.PromptBuilder
+import com.prismai.llmhost.persistence.LegacyConversationImporter
+import com.prismai.llmhost.persistence.PrismDatabase
+import com.prismai.llmhost.persistence.RoomConversationRepository
 import com.prismai.llmhost.agent.AgentTrace
 import com.prismai.llmhost.agent.AgentToolConfirmation
 import com.prismai.llmhost.agent.AgentToolRouter
@@ -158,6 +162,9 @@ class InferenceService : Service() {
     private val transcriptStore = TranscriptStore(this)
     private val chatSearchIndex = ChatSearchIndex()
     private lateinit var chatManager: ChatManager
+    private lateinit var prismDatabase: PrismDatabase
+    private lateinit var conversationRepository: RoomConversationRepository
+    private val chatRepositoryReady = CompletableDeferred<Unit>()
 
     // ── Extracted model management (Phase B refactor) ─────────────────────
     private lateinit var deviceProfiler: DeviceProfiler
@@ -267,6 +274,7 @@ class InferenceService : Service() {
     val transcript: StateFlow<List<TranscriptMessage>> get() = uiState.transcript
     val generationSettings: StateFlow<GenerationSettings> get() = uiState.generationSettings
     val generationPerformance: StateFlow<GenerationPerformance?> get() = uiState.generationPerformance
+    val preparedContext: StateFlow<com.prismai.llmhost.generation.PreparedContext?> get() = uiState.preparedContext
     val benchmarkRuns: StateFlow<List<BenchmarkRun>> get() = uiState.benchmarkRuns
     val benchmarkStatus: StateFlow<BenchmarkStatus> get() = uiState.benchmarkStatus
     val modelLoadDiagnostics: StateFlow<ModelLoadDiagnostics?> get() = uiState.modelLoadDiagnostics
@@ -281,7 +289,17 @@ class InferenceService : Service() {
     override fun onCreate() {
         super.onCreate()
         configStore = EngineConfigStore(getSharedPreferences(PREFS_NAME, MODE_PRIVATE))
-        chatManager = ChatManager(this, transcriptStore, chatSearchIndex, uiState, eventBus, serviceScope)
+        prismDatabase = PrismDatabase.getInstance(applicationContext)
+        conversationRepository = RoomConversationRepository(prismDatabase)
+        chatManager = ChatManager(
+            context = this,
+            transcriptStore = transcriptStore,
+            searchIndex = chatSearchIndex,
+            uiState = uiState,
+            eventBus = eventBus,
+            scope = serviceScope,
+            conversationRepository = conversationRepository,
+        )
         createNotificationChannel()
         CapabilityRegistryHolder.auditLog.init(filesDir)
         engine = NativeLlmBridge.create()
@@ -421,7 +439,6 @@ class InferenceService : Service() {
         chatTools = com.prismai.llmhost.agent.tools.ChatTools(
             chatManager = chatManager,
             chatSearchIndex = chatSearchIndex,
-            transcriptStore = transcriptStore,
             currentChatId = { _currentChatId.value },
             chatSessions = { _chatSessions.value },
             transcript = { _transcript.value },
@@ -531,7 +548,6 @@ class InferenceService : Service() {
 
         benchmarkStore.load()
         loadChats()
-        agentToolConfirmation.restore()
         loadGenerationSettings()
         refreshDeviceAndModelReadiness()
         observeHuggingFaceDownloadWork()
@@ -539,7 +555,15 @@ class InferenceService : Service() {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(KEY_ACTIVE_MODEL, null)
                 ?.let { savedModel ->
-                    switchModel(savedModel)
+                    if (!switchModel(savedModel)) {
+                        // A model can disappear after storage cleanup or a
+                        // test uninstall. Do not retry a stale selection on
+                        // every application start.
+                        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .remove(KEY_ACTIVE_MODEL)
+                            .apply()
+                    }
                 }
         }
         // Register push-based trim callback (instant notification)
@@ -664,6 +688,10 @@ class InferenceService : Service() {
     }
 
     fun createChat(): String {
+        if (!chatManager.isRepositoryReady) {
+            publishUiEvent("Conversations are still loading")
+            return ""
+        }
         if (_isGenerating.value) {
             publishUiEvent("Cancel generation before creating a new chat")
             return _currentChatId.value.orEmpty()
@@ -685,6 +713,10 @@ class InferenceService : Service() {
     }
 
     fun switchChat(chatId: String): Boolean {
+        if (!chatManager.isRepositoryReady) {
+            publishUiEvent("Conversations are still loading")
+            return false
+        }
         if (_isGenerating.value) {
             publishUiEvent("Cancel generation before switching chats")
             return false
@@ -705,6 +737,10 @@ class InferenceService : Service() {
     }
 
     fun deleteChat(chatId: String) {
+        if (!chatManager.isRepositoryReady) {
+            publishUiEvent("Conversations are still loading")
+            return
+        }
         if (_isGenerating.value) {
             publishUiEvent("Cancel generation before deleting a chat")
             return
@@ -714,6 +750,10 @@ class InferenceService : Service() {
     }
 
     fun clearTranscript() {
+        if (!chatManager.isRepositoryReady) {
+            publishUiEvent("Conversations are still loading")
+            return
+        }
         if (_isGenerating.value) {
             publishUiEvent("Cancel generation before clearing chat")
             return
@@ -788,6 +828,7 @@ class InferenceService : Service() {
         preserveBenchmarkQueue: Boolean = false,
         initiatedByBackground: Boolean = false,
     ): String {
+        chatRepositoryReady.await()
         var activeJob: Job? = null
         operationMutex.withLock {
             if (initiatedByBackground &&
@@ -1162,8 +1203,41 @@ class InferenceService : Service() {
     private fun legacyTranscriptFile(): File = transcriptStore.legacyTranscriptFile()
 
     private fun loadChats() {
-        chatManager.loadChats()
-        agentToolConfirmation.cleanupStale(_chatSessions.value.map { it.id }.toSet())
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                var loaded = chatManager.loadFromRepository()
+                if (!loaded) {
+                    val legacySessions = chatManager.legacySessionsForMigration()
+                    val result = LegacyConversationImporter(
+                        database = prismDatabase,
+                        legacyFilesRoot = filesDir,
+                    ).importIfNeeded(legacySessions)
+                    Log.i(TAG, "Legacy conversation Room bootstrap result=$result")
+                    loaded = chatManager.loadFromRepository()
+                }
+
+                check(loaded) { "Room conversation repository remained empty after bootstrap" }
+                Log.i(
+                    TAG,
+                    "Room conversation repository ready chats=${_chatSessions.value.size} " +
+                        "messages=${_chatSessions.value.sumOf { it.messageCount }}",
+                )
+            } catch (error: Throwable) {
+                Log.e(TAG, "Room conversation startup failed; creating a clean fallback chat", error)
+                val fallback = chatManager.newSession(ChatTitles.DEFAULT_TITLE, 0)
+                chatManager.restoreSnapshot(
+                    com.prismai.llmhost.persistence.ConversationSnapshot(
+                        sessions = listOf(fallback),
+                        messagesByChat = mapOf(fallback.id to emptyList()),
+                    )
+                )
+                chatManager.persistChatIndex()
+            } finally {
+                agentToolConfirmation.cleanupStale(_chatSessions.value.map { it.id }.toSet())
+                agentToolConfirmation.restore()
+                chatRepositoryReady.complete(Unit)
+            }
+        }
     }
 
     private fun readChatIndex(): List<ChatSession> = chatManager.readChatIndex()

@@ -116,6 +116,11 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
         gpuLayers: Int,
         grammar: String?,
     ): Int
+    private external fun nativeCountChatTokens(
+        handle: Long,
+        roles: Array<String>,
+        contents: Array<String>,
+    ): Int
     private external fun nativeRunBenchmark(
         handle: Long,
         maxTokens: Int,
@@ -513,6 +518,16 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
                 grammar,
             ) != -1
         }.flowOn(Dispatchers.IO)
+    }
+
+    /** Returns the active model tokenizer's count after applying its chat template. */
+    suspend fun countChatTokens(messages: List<ChatMessage>): Int = withContext(Dispatchers.Default) {
+        if (messages.isEmpty()) return@withContext -1
+        val roles = messages.map { it.role }.toTypedArray()
+        val contents = messages.map { it.content }.toTypedArray()
+        modelMutex.withLock {
+            if (isDestroyed) -1 else nativeCountChatTokens(nativeHandle, roles, contents)
+        }
     }
 
     @VisibleForTesting

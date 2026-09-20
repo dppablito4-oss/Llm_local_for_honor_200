@@ -379,6 +379,7 @@ internal fun ControlPlaneSheet(
                         performance = generationPerformance,
                         enabled = controlsEnabled,
                         deviceCapabilityProfile = deviceCapabilityProfile,
+                        currentModel = currentModel,
                         onSettingsChange = onSettingsChange,
                     )
                 }

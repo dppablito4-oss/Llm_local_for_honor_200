@@ -39,6 +39,10 @@ that AGP 9.x owns this path and double-declaration can break the build.
   - `com.prismai.llmhost.agent.AgentToolRouter` — Dispatches execution of the 11 modular agent tools.
 - `NativeLlmBridge.kt` loads `libllmhost`, serializes JNI calls with a mutex, and
   exposes streaming generation as `Flow<GenerationChunk>` using a pre-allocated carrier buffer.
+- `ContextBuilder.kt` produces an inspectable `PreparedContext`, bounds memory,
+  RAG, summary, and recent-history sections, and always preserves the current
+  question. Normal chat validates the final templated prompt with the active
+  native tokenizer before generation and refits when necessary.
 - `app/src/main/cpp/CMakeLists.txt` builds `libllmhost.so` from
   `llmhost_jni.cpp` and `Engine.cpp`, links static `llama`/`ggml`, disables most
   llama.cpp tools/tests/server outputs, and sets 16 KB page-size linker flags.
@@ -70,7 +74,16 @@ sources are `llmhost_jni.cpp` and `Engine.cpp`.
 ## Data And Storage
 
 - Active model, active chat, and generation settings live in SharedPreferences.
-- Chats are app-private JSON files: `chat_index.json` plus `chats/<id>.json`.
+- Chats are read from and written to Room. App-private `chat_index.json` plus
+  `chats/<id>.json` are asynchronous recovery backups.
+- `prismlocal.db` is a Room database with `chats`, `messages`, and
+  `migration_state`. An empty database is bootstrapped through a verified,
+  transactional JSON import; otherwise Room is the conversation authority.
+  `RoomConversationRepository` loads one in-memory snapshot for synchronous chat
+  switching and search without main-thread database access.
+- `PrismApplication` provides WorkManager configuration on demand. The shared
+  AndroidX App Startup provider is removed from the manifest; all WorkManager
+  call sites use `getInstance(context)`.
 - Benchmark history is app-private `benchmark_runs.json`.
 - Recovery text can be written to app-private `recovery_transcript.txt`.
 - Models live under app-owned external `models/<modelId>/` directories with
@@ -132,7 +145,8 @@ Instrumentation tests under `app/src/androidTest/java/com/prismai/llmhost`
 cover native engine stress paths, model storage import/resolve/failure cleanup,
 real tiny-model smoke generation and cancellation, service model switching,
 foreground generation cancellation, transcript persistence, runtime settings
-performance publication, and stream-state safety.
+performance publication, stream-state safety, legacy JSON import, and Room
+conversation mirroring.
 
 Dated evidence docs:
 

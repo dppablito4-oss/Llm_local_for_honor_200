@@ -7,6 +7,16 @@ import com.prismai.llmhost.tools.*
 import com.prismai.llmhost.ui.*
 import com.prismai.llmhost.model.*
 
+enum class ReasoningMode {
+    NORMAL,
+    THINKING;
+
+    companion object {
+        fun fromStorage(value: String?): ReasoningMode =
+            entries.firstOrNull { it.name == value } ?: NORMAL
+    }
+}
+
 data class GenerationSettings(
     val maxTokens: Int = DEFAULT_MAX_TOKENS,
     val threadCount: Int = DEFAULT_THREAD_COUNT,
@@ -16,6 +26,7 @@ data class GenerationSettings(
     val topK: Int = DEFAULT_TOP_K,
     val topP: Float = DEFAULT_TOP_P,
     val repeatPenalty: Float = DEFAULT_REPEAT_PENALTY,
+    val reasoningMode: ReasoningMode = ReasoningMode.NORMAL,
     val gpuLayers: Int = DEFAULT_GPU_LAYERS,
     val useVulkan: Boolean = false,
     val agentEnabled: Boolean = false,
@@ -39,6 +50,7 @@ data class GenerationSettings(
             topK = topK.coerceIn(MIN_TOP_K, MAX_TOP_K),
             topP = topP.coerceIn(MIN_TOP_P, MAX_TOP_P),
             repeatPenalty = repeatPenalty.coerceIn(MIN_REPEAT_PENALTY, MAX_REPEAT_PENALTY),
+            reasoningMode = reasoningMode,
             gpuLayers = gpuLayers.coerceIn(MIN_GPU_LAYERS, MAX_GPU_LAYERS),
             useVulkan = useVulkan,
             agentEnabled = agentEnabled,
@@ -109,6 +121,7 @@ data class GenerationSettings(
             .put("top_k", topK)
             .put("top_p", topP.toDouble())
             .put("repeat_penalty", repeatPenalty.toDouble())
+            .put("reasoning_mode", reasoningMode.name.lowercase())
             .put("gpu_layers", gpuLayers)
             .put("use_vulkan", useVulkan)
 }

@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
 }
 
 import java.util.Properties
@@ -330,6 +331,7 @@ gradle.taskGraph.whenReady {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
+    val roomVersion = "2.8.5"
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -341,8 +343,14 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    // WorkManager/lifecycle bring Startup transitively. Pin the current stable
+    // artifact so its generated R class is packaged correctly with AGP 9.
+    implementation("androidx.startup:startup-runtime:1.2.0")
     implementation("androidx.work:work-runtime-ktx:2.11.0")
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    ksp("androidx.room:room-compiler:$roomVersion")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -353,4 +361,10 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("junit:junit:4.13.2")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+}
+
+ksp {
+    arg("room.schemaLocation", file("$projectDir/schemas").path)
+    arg("room.incremental", "true")
+    arg("room.generateKotlin", "true")
 }

@@ -2,6 +2,7 @@ package com.prismai.llmhost.engine
 
 import android.content.SharedPreferences
 import com.prismai.llmhost.GenerationSettings
+import com.prismai.llmhost.ReasoningMode
 import com.prismai.llmhost.engine.runtime.AppliedPlan
 import com.prismai.llmhost.engine.runtime.BackendPreference
 import com.prismai.llmhost.engine.runtime.InferencePlan
@@ -30,6 +31,7 @@ class EngineConfigStoreTest {
         topK = 80,
         topP = 0.80f,
         repeatPenalty = 1.30f,
+        reasoningMode = ReasoningMode.THINKING,
         gpuLayers = 42,
         useVulkan = false,
         agentEnabled = true,
@@ -59,6 +61,7 @@ class EngineConfigStoreTest {
         assertEquals(original.topK, loaded.topK)
         assertEquals(original.topP, loaded.topP, 0.0f)
         assertEquals(original.repeatPenalty, loaded.repeatPenalty, 0.0f)
+        assertEquals(original.reasoningMode, loaded.reasoningMode)
         assertEquals(original.gpuLayers, loaded.gpuLayers)
         assertEquals(original.useVulkan, loaded.useVulkan)
         assertEquals(original.agentEnabled, loaded.agentEnabled)
@@ -76,6 +79,7 @@ class EngineConfigStoreTest {
         assertEquals(GenerationSettings.DEFAULT_BATCH_SIZE, loaded.batchSize)
         assertEquals(GenerationSettings.DEFAULT_GPU_LAYERS, loaded.gpuLayers)
         assertFalse(loaded.useVulkan)
+        assertEquals(ReasoningMode.NORMAL, loaded.reasoningMode)
         assertEquals(GenerationSettings.DEFAULT_MAX_AGENT_ITERATIONS, loaded.maxAgentIterations)
         assertEquals("q8_0", loaded.kvCacheTypeK)
         assertEquals("q8_0", loaded.kvCacheTypeV)
@@ -120,6 +124,7 @@ class EngineConfigStoreTest {
         assertFalse(EngineConfigStore.requiresReload(base, base.copy(topK = 10)))
         assertFalse(EngineConfigStore.requiresReload(base, base.copy(topP = 0.5f)))
         assertFalse(EngineConfigStore.requiresReload(base, base.copy(repeatPenalty = 1.0f)))
+        assertFalse(EngineConfigStore.requiresReload(base, base.copy(reasoningMode = ReasoningMode.NORMAL)))
         assertFalse(EngineConfigStore.requiresReload(base, base.copy(agentEnabled = false)))
     }
 

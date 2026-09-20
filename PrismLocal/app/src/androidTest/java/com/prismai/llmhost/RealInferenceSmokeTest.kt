@@ -51,6 +51,37 @@ class RealInferenceSmokeTest {
     }
 
     @Test
+    fun activeTokenizerCountsTemplatedChatBeforeGeneration() = runBlocking {
+        val model = requireTinyModel()
+        val settings = GenerationSettings(maxTokens = 1, threadCount = 2, contextLength = 512)
+        val engine = NativeLlmBridge.create(debugHooksEnabled = false)
+        try {
+            assertTrue(engine.loadModel(model.file.absolutePath, settings))
+            val shortChat = listOf(
+                ChatMessage(ChatMessage.ROLE_SYSTEM, "You are concise."),
+                ChatMessage(ChatMessage.ROLE_USER, "Hello"),
+            )
+            val longChat = shortChat + ChatMessage(
+                ChatMessage.ROLE_USER,
+                "Additional context for tokenizer measurement. ".repeat(20),
+            )
+
+            val shortCount = engine.countChatTokens(shortChat)
+            val longCount = engine.countChatTokens(longChat)
+
+            assertTrue("expected a positive native token count, got $shortCount", shortCount > 0)
+            assertTrue("longer templated chat should use more tokens: $shortCount vs $longCount", longCount > shortCount)
+
+            val chunks = engine.generateChat(shortChat, settings).toList()
+            assertTrue("structured generation entered native error", chunks.none {
+                it.isTerminal && it.terminalReason == "ERROR"
+            })
+        } finally {
+            engine.destroySafely()
+        }
+    }
+
+    @Test
     fun realGenerationCancellationReachesCancelled() = runBlocking {
         val model = requireTinyModel()
         val engine = NativeLlmBridge.create(debugHooksEnabled = false)

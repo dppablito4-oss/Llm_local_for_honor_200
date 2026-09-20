@@ -71,6 +71,8 @@ class GenerationOrchestrator(
         private const val TRUNCATION_MAX_DEPTH = 4
         private const val TRUNCATED_STRING_LIMIT = 150
         private const val TRUNCATED_ARRAY_LIMIT = 5
+        private const val NATIVE_CONTEXT_HEADROOM_TOKENS = 8
+        private const val TOKENIZER_REFIT_PAD_TOKENS = 16
     }
 
     // ── Flow deduplication types ─────────────────────────────────────────
@@ -144,12 +146,30 @@ class GenerationOrchestrator(
         }
 
         // Preset overrides apply only to this generation call — never write them into persisted UI settings.
-        val settings = benchmarkPreset?.applySettingsOverrides(baseSettings) ?: baseSettings
+        val requestedSettings = benchmarkPreset?.applySettingsOverrides(baseSettings) ?: baseSettings
         if (baseSettings != uiState.generationSettings.value) {
             uiState._generationSettings.value = baseSettings
         }
 
-        val agentEnabled = settings.agentEnabled
+        val behavior = ModelBehaviorProfiles.resolve(uiState.currentModel.value)
+        val agentEnabled = requestedSettings.agentEnabled
+        val settings = if (benchmarkPreset == null) {
+            behavior.effectiveSettings(requestedSettings, agentEnabled)
+        } else {
+            requestedSettings
+        }
+        val preparedPrompt = if (benchmarkPreset == null) {
+            behavior.prepareUserPrompt(prompt, requestedSettings.reasoningMode, agentEnabled)
+        } else {
+            prompt
+        }
+        if (
+            benchmarkPreset == null &&
+            behavior.isReasoningEnabled(requestedSettings.reasoningMode) &&
+            requestedSettings.contextLength < ModelBehaviorProfile.RECOMMENDED_REASONING_CONTEXT
+        ) {
+            eventBus.publish("El modo thinking funciona mejor con 4096 tokens de contexto o más")
+        }
         if (agentEnabled) {
             agentTrace.reset()
             agentTrace.activeAgentChainPrompt = prompt
@@ -161,20 +181,90 @@ class GenerationOrchestrator(
         // Structured, role-preserving messages for normal chat. The legacy string
         // path stays for agent turns and benchmark presets, which build their own
         // protocol prompts and must keep byte-identical behavior.
-        val chatMessages: List<ChatMessage>? = if (benchmarkPreset == null && !agentEnabled) {
-            promptBuilder.buildMessages(
-                newPrompt = prompt,
+        var preparedContext: PreparedContext? = if (benchmarkPreset == null && !agentEnabled) {
+            val promptBudget = GenerationBudget.calculateNonAgentTokenBudget(
+                contextLength = settings.contextLength,
+                maxTokens = settings.maxTokens,
+            )
+            promptBuilder.prepareContext(
+                newPrompt = preparedPrompt,
                 transcript = uiState.transcript.value,
                 activeAssistantTranscriptId = null,
                 memoryContext = memoryContext,
-                tokenBudget = GenerationBudget.calculateNonAgentTokenBudget(
-                    contextLength = settings.contextLength,
-                    maxTokens = settings.maxTokens,
-                ),
+                tokenBudget = promptBudget,
+                contextLength = settings.contextLength,
+                reservedOutputTokens = settings.maxTokens,
+                reservedTemplateTokens = GenerationBudget.DEFAULT_NON_AGENT_RESERVED_TOKENS,
+                includeSystemPrompt = !behavior.omitSystemPrompt,
             )
         } else {
             null
         }
+        if (preparedContext != null) {
+            val nativePromptLimit = (
+                settings.contextLength - settings.maxTokens - NATIVE_CONTEXT_HEADROOM_TOKENS
+            ).coerceAtLeast(0)
+            var attempts = 0
+            while (attempts < 2) {
+                val candidate = preparedContext ?: break
+                val exactTokens = runCatching {
+                    engine.countChatTokens(candidate.messages)
+                }.getOrDefault(-1)
+                if (exactTokens <= 0) break
+                preparedContext = candidate.withNativeTokenCount(exactTokens, uiState.currentModel.value)
+                if (exactTokens <= nativePromptLimit) break
+
+                val overflow = exactTokens - nativePromptLimit
+                val reducedBudget = (
+                    candidate.promptTokenBudget - overflow - TOKENIZER_REFIT_PAD_TOKENS
+                ).coerceAtLeast(0)
+                if (reducedBudget >= candidate.promptTokenBudget) break
+                preparedContext = promptBuilder.prepareContext(
+                    newPrompt = preparedPrompt,
+                    transcript = uiState.transcript.value,
+                    activeAssistantTranscriptId = null,
+                    memoryContext = memoryContext,
+                    tokenBudget = reducedBudget,
+                    contextLength = settings.contextLength,
+                    reservedOutputTokens = settings.maxTokens,
+                    reservedTemplateTokens = GenerationBudget.DEFAULT_NON_AGENT_RESERVED_TOKENS,
+                    includeSystemPrompt = !behavior.omitSystemPrompt,
+                )
+                attempts++
+            }
+            val exactTokens = if (preparedContext.tokenCountSource == TokenCountSource.NATIVE_TOKENIZER) {
+                preparedContext.totalPromptTokens
+            } else {
+                runCatching { engine.countChatTokens(preparedContext.messages) }.getOrDefault(-1)
+            }
+            if (exactTokens > 0 && preparedContext.tokenCountSource != TokenCountSource.NATIVE_TOKENIZER) {
+                preparedContext = preparedContext.withNativeTokenCount(exactTokens, uiState.currentModel.value)
+            }
+            uiState._preparedContext.value = preparedContext
+            if (exactTokens > nativePromptLimit) {
+                Log.w(
+                    TAG,
+                    "context rejected exactTokens=$exactTokens nativeLimit=$nativePromptLimit " +
+                        "historyDropped=${preparedContext.droppedHistoryMessages}",
+                )
+                eventBus.publish(
+                    "El mensaje y el contexto fijo superan la ventana del modelo. " +
+                        "Reduce el mensaje o la salida máxima.",
+                )
+                return
+            }
+            Log.i(
+                TAG,
+                "context prepared tokens=${preparedContext.totalPromptTokens} " +
+                    "source=${preparedContext.tokenCountSource} budget=${preparedContext.promptTokenBudget} " +
+                    "model=${preparedContext.modelId} tokenizer=${preparedContext.tokenizer} " +
+                    "historyDropped=${preparedContext.droppedHistoryMessages} " +
+                    "sections=${preparedContext.sections.joinToString { usage -> "${usage.section}:${usage.estimatedTokens}" }}",
+            )
+        } else {
+            uiState._preparedContext.value = null
+        }
+        val chatMessages: List<ChatMessage>? = preparedContext?.messages
         val enginePrompt = if (benchmarkPreset == null) {
             if (agentEnabled) {
                 val maxHistoryChars = GenerationBudget.calculateAgentHistoryCharBudget(
@@ -192,7 +282,7 @@ class GenerationOrchestrator(
                         append(memoryContext)
                     }
                 }
-                AgentToolProtocol.buildPrompt(prompt, historyWithMemory)
+                AgentToolProtocol.buildPrompt(preparedPrompt, historyWithMemory)
             } else {
                 // Telemetry/label for the structured path; roles are carried by chatMessages.
                 chatMessages.orEmpty().joinToString("\n") { "${it.role}: ${it.content}" }

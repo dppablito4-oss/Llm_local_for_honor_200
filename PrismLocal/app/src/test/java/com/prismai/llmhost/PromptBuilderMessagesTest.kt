@@ -2,6 +2,9 @@ package com.prismai.llmhost
 
 import com.prismai.llmhost.bridge.ChatMessage
 import com.prismai.llmhost.generation.PromptBuilder
+import com.prismai.llmhost.generation.ContextBuilder
+import com.prismai.llmhost.generation.ContextSection
+import com.prismai.llmhost.generation.TokenCountSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -133,5 +136,162 @@ class PromptBuilderMessagesTest {
         assertEquals(3, result.size)
         assertEquals(newest, result[1].content)
         assertEquals("q", result.last().content)
+    }
+
+    @Test
+    fun systemPromptCanBeOmittedForModelsThatDoNotSupportIt() {
+        val result = PromptBuilder.assembleChatMessages(
+            newPrompt = "resuelve esto",
+            transcript = emptyList(),
+            activeAssistantTranscriptId = null,
+            memoryContext = "Dato recordado",
+            tokenBudget = 4096,
+            systemPrompt = null,
+        )
+
+        assertEquals(1, result.size)
+        assertEquals(ChatMessage.ROLE_USER, result.single().role)
+        assertEquals("Dato recordado\n\nresuelve esto", result.single().content)
+    }
+
+    @Test
+    fun reasoningIsRemovedFromAssistantHistory() {
+        val transcript = listOf(
+            message(1, TranscriptRole.ASSISTANT, "<think>secreto interno</think>Respuesta final"),
+        )
+
+        val result = PromptBuilder.assembleChatMessages("continúa", transcript, null, "", 4096)
+
+        assertEquals("Respuesta final", result[1].content)
+        assertTrue(result.none { "secreto interno" in it.content })
+    }
+
+    @Test
+    fun incompleteReasoningIsNotAddedAsAnEmptyAssistantTurn() {
+        val transcript = listOf(
+            message(1, TranscriptRole.USER, "pregunta"),
+            message(2, TranscriptRole.ASSISTANT, "<think>sigue pensando"),
+        )
+
+        val result = PromptBuilder.assembleChatMessages("nuevo intento", transcript, null, "", 4096)
+
+        assertEquals(
+            listOf(ChatMessage.ROLE_SYSTEM, ChatMessage.ROLE_USER, ChatMessage.ROLE_USER),
+            result.map { it.role },
+        )
+        assertTrue(result.none { it.content.isBlank() })
+    }
+
+    @Test
+    fun persistedTextHistoryCanBeRebuiltForAnotherModelWithoutKvState() {
+        val persistedTranscript = listOf(
+            message(1, TranscriptRole.USER, "Recuerda la clave ORQUIDEA"),
+            message(2, TranscriptRole.ASSISTANT, "La clave es ORQUIDEA"),
+        )
+
+        // A model switch discards native KV state. The next model must receive
+        // the durable text transcript again, preserving roles and order.
+        val rebuiltForNewModel = PromptBuilder.assembleChatMessages(
+            newPrompt = "Cual era la clave?",
+            transcript = persistedTranscript,
+            activeAssistantTranscriptId = null,
+            memoryContext = "",
+            tokenBudget = 4096,
+        )
+
+        assertEquals(
+            listOf(
+                ChatMessage.ROLE_SYSTEM,
+                ChatMessage.ROLE_USER,
+                ChatMessage.ROLE_ASSISTANT,
+                ChatMessage.ROLE_USER,
+            ),
+            rebuiltForNewModel.map { it.role },
+        )
+        assertEquals("Recuerda la clave ORQUIDEA", rebuiltForNewModel[1].content)
+        assertEquals("La clave es ORQUIDEA", rebuiltForNewModel[2].content)
+        assertEquals("Cual era la clave?", rebuiltForNewModel.last().content)
+    }
+
+    @Test
+    fun preparedContextReportsIncludedAndDroppedHistory() {
+        val transcript = listOf(
+            message(1, TranscriptRole.USER, "a".repeat(400)),
+            message(2, TranscriptRole.ASSISTANT, "b".repeat(120)),
+            message(3, TranscriptRole.USER, "c".repeat(120)),
+        )
+
+        val prepared = ContextBuilder.prepare(
+            newPrompt = "pregunta actual",
+            transcript = transcript,
+            activeAssistantTranscriptId = null,
+            memoryContext = "",
+            promptTokenBudget = 110,
+            contextLength = 512,
+            reservedOutputTokens = 128,
+            reservedTemplateTokens = 64,
+            systemPrompt = "sistema",
+        )
+
+        val history = prepared.sections.single { it.section == ContextSection.HISTORY }
+        assertEquals(2, history.includedItems)
+        assertEquals(1, history.droppedItems)
+        assertEquals("pregunta actual", prepared.messages.last().content)
+        assertEquals(512, prepared.contextLength)
+        assertEquals(128, prepared.reservedOutputTokens)
+    }
+
+    @Test
+    fun oversizedMemoryIsBoundedBeforeRecentHistory() {
+        val recent = "turno reciente"
+        val prepared = ContextBuilder.prepare(
+            newPrompt = "continua",
+            transcript = listOf(message(1, TranscriptRole.USER, recent)),
+            activeAssistantTranscriptId = null,
+            memoryContext = "memoria ".repeat(200),
+            promptTokenBudget = 160,
+            systemPrompt = "sistema",
+        )
+
+        val memory = prepared.sections.single { it.section == ContextSection.MEMORY }
+        assertTrue(memory.truncated)
+        assertTrue(prepared.messages.any { it.content == recent })
+        assertEquals("continua", prepared.messages.last().content)
+    }
+
+    @Test
+    fun currentQuestionSurvivesEvenWhenFixedContextExceedsBudget() {
+        val prepared = ContextBuilder.prepare(
+            newPrompt = "pregunta imprescindible",
+            transcript = listOf(message(1, TranscriptRole.USER, "historial")),
+            activeAssistantTranscriptId = null,
+            memoryContext = "memoria",
+            promptTokenBudget = 0,
+            systemPrompt = "sistema",
+        )
+
+        assertEquals("pregunta imprescindible", prepared.messages.last().content)
+        assertEquals(1, prepared.droppedHistoryMessages)
+        assertTrue(prepared.estimatedPromptTokens > prepared.promptTokenBudget)
+    }
+
+    @Test
+    fun nativeTokenizerCountCanBeAttachedWithoutLosingEstimate() {
+        val prepared = ContextBuilder.prepare(
+            newPrompt = "hola",
+            transcript = emptyList(),
+            activeAssistantTranscriptId = null,
+            memoryContext = "",
+            promptTokenBudget = 100,
+            systemPrompt = "sistema",
+        )
+
+        val exact = prepared.withNativeTokenCount(17, "qwen-test")
+
+        assertEquals(TokenCountSource.NATIVE_TOKENIZER, exact.tokenCountSource)
+        assertEquals(17, exact.totalPromptTokens)
+        assertEquals("qwen-test", exact.modelId)
+        assertEquals("llama.cpp-active-model", exact.tokenizer)
+        assertEquals(prepared.estimatedPromptTokens, exact.estimatedPromptTokens)
     }
 }

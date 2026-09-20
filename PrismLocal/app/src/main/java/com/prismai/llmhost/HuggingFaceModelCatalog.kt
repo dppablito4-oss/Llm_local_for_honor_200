@@ -234,6 +234,18 @@ object HuggingFaceModelCatalog {
             notes = "Modelo de razonamiento destilado de DeepSeek-R1; ofrece razonamiento avanzado en un tamaño reducido.",
         ),
         HuggingFaceModelEntry(
+            id = "qwen3_17b_q4km",
+            name = "Qwen3 1.7B (Normal + Thinking)",
+            repoId = "ggml-org/Qwen3-1.7B-GGUF",
+            fileName = "Qwen3-1.7B-Q4_K_M.gguf",
+            expectedBytes = 1_282_439_264L,
+            expectedSha256 = "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
+            license = "Apache-2.0",
+            parameters = "1.7B",
+            quantization = "Q4_K_M",
+            notes = "Qwen3 pequeño con /think y /no_think en el mismo modelo; recomendado para comparar chat rápido y razonamiento local.",
+        ),
+        HuggingFaceModelEntry(
             id = "granite31_2b_q4km",
             name = "Granite 3.1 2B Instruct",
             repoId = "bartowski/granite-3.1-2b-instruct-GGUF",

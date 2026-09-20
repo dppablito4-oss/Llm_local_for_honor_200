@@ -26,6 +26,7 @@ class EngineConfigStore(private val prefs: SharedPreferences) {
         topK = prefs.getInt(KEY_TOP_K, GenerationSettings.DEFAULT_TOP_K),
         topP = prefs.getFloat(KEY_TOP_P, GenerationSettings.DEFAULT_TOP_P),
         repeatPenalty = prefs.getFloat(KEY_REPEAT_PENALTY, GenerationSettings.DEFAULT_REPEAT_PENALTY),
+        reasoningMode = ReasoningMode.fromStorage(prefs.getString(KEY_REASONING_MODE, null)),
         gpuLayers = prefs.getInt(KEY_GPU_LAYERS, GenerationSettings.DEFAULT_GPU_LAYERS),
         useVulkan = prefs.getBoolean(KEY_USE_VULKAN, false),
         agentEnabled = prefs.getBoolean(KEY_AGENT_ENABLED, false),
@@ -45,6 +46,7 @@ class EngineConfigStore(private val prefs: SharedPreferences) {
             .putInt(KEY_TOP_K, settings.topK)
             .putFloat(KEY_TOP_P, settings.topP)
             .putFloat(KEY_REPEAT_PENALTY, settings.repeatPenalty)
+            .putString(KEY_REASONING_MODE, settings.reasoningMode.name)
             .putInt(KEY_GPU_LAYERS, settings.gpuLayers)
             .putBoolean(KEY_USE_VULKAN, settings.useVulkan)
             .putBoolean(KEY_AGENT_ENABLED, settings.agentEnabled)
@@ -64,6 +66,7 @@ class EngineConfigStore(private val prefs: SharedPreferences) {
         const val KEY_TOP_K = "top_k"
         const val KEY_TOP_P = "top_p"
         const val KEY_REPEAT_PENALTY = "repeat_penalty"
+        const val KEY_REASONING_MODE = "reasoning_mode"
         const val KEY_GPU_LAYERS = "gpu_layers"
         const val KEY_USE_VULKAN = "use_vulkan"
         const val KEY_AGENT_ENABLED = "agent_enabled"

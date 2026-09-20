@@ -64,6 +64,10 @@ internal fun MessageBubble(
     val view = LocalView.current
     val copyLabel = if (isUser) "prompt" else "response"
     var showReportDialog by remember { mutableStateOf(false) }
+    var reasoningExpanded by remember { mutableStateOf(false) }
+    val parsedOutput = remember(text, isUser) {
+        if (isUser) null else ReasoningOutputParser.parse(text)
+    }
 
     if (showReportDialog) {
         ReportAiContentDialog(
@@ -133,8 +137,55 @@ internal fun MessageBubble(
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-                SelectionContainer {
-                    EnhancedMarkdownText(text = text)
+                if (parsedOutput?.hasReasoning == true) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        border = BorderStroke(1.dp, prismGlassBorderColor()),
+                        onClick = { reasoningExpanded = !reasoningExpanded },
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                            Text(
+                                text = when {
+                                    !parsedOutput.reasoningComplete && showLoading -> {
+                                        val generated = performance?.generatedTokens?.takeIf { it > 0 }
+                                        if (generated != null) "Razonando… $generated tokens" else "Razonando…"
+                                    }
+                                    parsedOutput.reasoningComplete -> "Razonamiento ${if (reasoningExpanded) "⌃" else "⌄"}"
+                                    else -> "Razonamiento incompleto ${if (reasoningExpanded) "⌃" else "⌄"}"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (reasoningExpanded && parsedOutput.reasoning.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(7.dp))
+                                SelectionContainer {
+                                    Text(
+                                        text = parsedOutput.reasoning,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (!parsedOutput.reasoningComplete && !showLoading) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "El razonamiento no llegó a una respuesta final. Puedes abrir el bloque para revisarlo y usar Continuar.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PrismAmber,
+                        )
+                    }
+                    if (parsedOutput.answer.isNotBlank()) Spacer(modifier = Modifier.height(10.dp))
+                }
+                val visibleAnswer = parsedOutput?.answer ?: text
+                if (visibleAnswer.isNotBlank()) {
+                    SelectionContainer {
+                        EnhancedMarkdownText(text = visibleAnswer)
+                    }
                 }
                 if (text.isNotBlank()) {
                     Spacer(modifier = Modifier.height(6.dp))
@@ -145,7 +196,7 @@ internal fun MessageBubble(
                     ) {
                         MessageAction(label = "Copy") {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            copyTextToClipboard(context, label, text)
+                            copyTextToClipboard(context, label, visibleAnswer.ifBlank { text })
                             Toast.makeText(context, "Copied $copyLabel", Toast.LENGTH_SHORT).show()
                         }
                         MessageAction(label = "Report") {

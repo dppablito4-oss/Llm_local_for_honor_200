@@ -14,6 +14,8 @@ import com.prismai.llmhost.ChatSession
 import com.prismai.llmhost.ChatTitles
 import com.prismai.llmhost.TranscriptMessage
 import com.prismai.llmhost.TranscriptRole
+import com.prismai.llmhost.persistence.ConversationRepository
+import com.prismai.llmhost.persistence.ConversationSnapshot
 import com.prismai.llmhost.ui.ServiceUiState
 import com.prismai.llmhost.ui.UiEventBus
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +26,8 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Chat CRUD operations.
@@ -41,8 +45,15 @@ class ChatManager(
     private val uiState: ServiceUiState,
     private val eventBus: UiEventBus,
     private val scope: CoroutineScope,
+    private val conversationRepository: ConversationRepository? = null,
 ) {
     private val ioMutex = Mutex()
+    private val chatIndexRevision = AtomicLong(0L)
+    private val transcriptCache = ConcurrentHashMap<String, List<TranscriptMessage>>()
+
+    @Volatile
+    var isRepositoryReady: Boolean = false
+        private set
 
     // ── Public fields — accessed from InferenceService via delegation props ──
     @Volatile
@@ -84,6 +95,7 @@ class ChatManager(
             activeAssistantTranscriptId = null
             lastTranscriptPersistAt = 0L
         }
+        transcriptCache[session.id] = emptyList()
         uiState.streamState.clear()
         persistChatIndex()
         persistTranscriptNow()
@@ -104,7 +116,7 @@ class ChatManager(
             return false
         }
         persistTranscriptNow()
-        val restored = transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(chatId))
+        val restored = messagesForChat(chatId)
         synchronized(lock) {
             uiState._currentChatId.value = chatId
             uiState._transcript.value = restored
@@ -142,11 +154,18 @@ class ChatManager(
         }
 
         val remaining = uiState._chatSessions.value.filterNot { it.id == chatId }
+        transcriptCache.remove(chatId)
         runCatching { transcriptStore.transcriptFile(chatId).delete() }
             .onFailure { error -> Log.w(TAG, "failed to delete chat transcript", error) }
 
         if (remaining.isEmpty()) {
-            uiState._chatSessions.value = emptyList()
+            synchronized(lock) {
+                uiState._chatSessions.value = emptyList()
+                uiState._currentChatId.value = null
+                uiState._transcript.value = emptyList()
+                nextTranscriptId = 1L
+                activeAssistantTranscriptId = null
+            }
             // Create a new chat to replace the deleted one
             createChat()
             return true
@@ -158,7 +177,7 @@ class ChatManager(
         if (uiState._currentChatId.value == chatId) {
             // Switch to the first remaining chat without persist (already done above) or agent side effects
             val newId = remaining.first().id
-            val restored = transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(newId))
+            val restored = messagesForChat(newId)
             synchronized(lock) {
                 uiState._currentChatId.value = newId
                 uiState._transcript.value = restored
@@ -184,6 +203,7 @@ class ChatManager(
             lastTranscriptPersistAt = 0L
         }
         uiState.streamState.clear()
+        uiState._currentChatId.value?.let { transcriptCache[it] = emptyList() }
         touchCurrentChat(emptyList(), updateTitle = false)
         runCatching {
             uiState._currentChatId.value?.let {
@@ -193,23 +213,41 @@ class ChatManager(
             Log.w(TAG, "failed to delete transcript", error)
         }
         persistChatIndex()
+        // Persist an explicit empty snapshot. Deleting the legacy file alone
+        // cannot tell the Room mirror that every message was cleared.
+        persistTranscriptNow()
     }
 
     // ── Chat state persistence ───────────────────────────────────────────
 
-    fun loadChats() {
+    /** Reads only the legacy JSON backup for a one-time Room bootstrap. */
+    fun legacySessionsForMigration(): List<ChatSession> {
         val indexedSessions = readChatIndex()
-        val sessions = if (indexedSessions.isNotEmpty()) {
-            indexedSessions
-        } else {
-            val legacyMessages = transcriptStore.readTranscriptFile(transcriptStore.legacyTranscriptFile())
-            val session = newSession(
-                title = transcriptStore.firstUserTitle(legacyMessages) ?: ChatTitles.DEFAULT_TITLE,
-                messageCount = legacyMessages.size,
-            )
-            transcriptStore.writeTranscriptFile(transcriptStore.transcriptFile(session.id), legacyMessages)
-            listOf(session)
-        }
+        if (indexedSessions.isNotEmpty()) return indexedSessions
+
+        return listOf(
+            run {
+                val legacyMessages = transcriptStore.readTranscriptFile(transcriptStore.legacyTranscriptFile())
+                val session = newSession(
+                    title = transcriptStore.firstUserTitle(legacyMessages) ?: ChatTitles.DEFAULT_TITLE,
+                    messageCount = legacyMessages.size,
+                )
+                transcriptStore.writeTranscriptFile(transcriptStore.transcriptFile(session.id), legacyMessages)
+                session
+            }
+        )
+    }
+
+    suspend fun loadFromRepository(): Boolean {
+        val repository = conversationRepository ?: return false
+        val snapshot = repository.loadSnapshot()
+        if (snapshot.sessions.isEmpty()) return false
+        restoreSnapshot(snapshot)
+        return true
+    }
+
+    fun restoreSnapshot(snapshot: ConversationSnapshot) {
+        val sessions = snapshot.sessions.sortedByDescending { it.updatedAt }
 
         val activeChat = prefs
             .getString(KEY_ACTIVE_CHAT, null)
@@ -226,7 +264,12 @@ class ChatManager(
             sessions + activeSession
         }.sortedByDescending { it.updatedAt }
 
-        val restored = transcriptStore.readTranscriptFile(transcriptStore.transcriptFile(activeSession.id))
+        val restored = snapshot.messagesByChat[activeSession.id].orEmpty()
+
+        transcriptCache.clear()
+        snapshot.messagesByChat.forEach { (chatId, messages) ->
+            transcriptCache[chatId] = messages
+        }
 
         synchronized(lock) {
             uiState._chatSessions.value = normalizedSessions
@@ -235,11 +278,19 @@ class ChatManager(
             nextTranscriptId = (restored.maxOfOrNull { it.id } ?: 0L) + 1L
         }
 
-        persistChatIndex()
-        searchIndex.refresh(normalizedSessions, transcriptStore)
+        searchIndex.refresh(normalizedSessions, snapshot.messagesByChat)
+        isRepositoryReady = true
 
         prefs.edit().putString(KEY_ACTIVE_CHAT, activeSession.id).apply()
+        persistSnapshotJsonBackup(snapshot)
     }
+
+    fun messagesForChat(chatId: String): List<TranscriptMessage> =
+        if (uiState._currentChatId.value == chatId) {
+            uiState._transcript.value
+        } else {
+            transcriptCache[chatId].orEmpty()
+        }
 
     fun readChatIndex(): List<ChatSession> =
         runCatching {
@@ -268,28 +319,26 @@ class ChatManager(
         }.getOrDefault(emptyList())
 
     fun persistChatIndex() {
+        val revision = chatIndexRevision.incrementAndGet()
         val sessionsSnapshot = uiState._chatSessions.value
         scope.launch(Dispatchers.IO) {
             ioMutex.withLock {
+                // IO coroutines can reach this mutex out of launch order. Only
+                // the newest snapshot may replace the index or Room rows.
+                if (revision != chatIndexRevision.get()) return@withLock
+
                 runCatching {
-                    val array = JSONArray()
-                    sessionsSnapshot.forEach { session ->
-                        array.put(
-                            JSONObject()
-                                .put("id", session.id)
-                                .put("title", session.title)
-                                .put("createdAt", session.createdAt)
-                                .put("updatedAt", session.updatedAt)
-                                .put("modelId", session.modelId)
-                                .put("messageCount", session.messageCount)
-                        )
-                    }
-                    val target = transcriptStore.chatIndexFile()
-                    val temp = File(context.filesDir, "chat_index.json.tmp")
-                    temp.writeText(array.toString())
-                    transcriptStore.promoteTempFile(temp, target)
+                    conversationRepository?.syncSessions(sessionsSnapshot)
                 }.onFailure { error ->
-                    Log.w(TAG, "failed to persist chat index", error)
+                    Log.e(TAG, "failed to persist chat index to Room", error)
+                }
+
+                // JSON is retained as a recoverable backup during the Room
+                // cutover, but no longer gates the primary database write.
+                runCatching {
+                    writeChatIndexJson(sessionsSnapshot)
+                }.onFailure { error ->
+                    Log.w(TAG, "failed to write JSON chat-index backup", error)
                 }
             }
         }
@@ -352,6 +401,7 @@ class ChatManager(
             val mutable = uiState._transcript.value.toMutableList()
             mutable.add(TranscriptMessage(id, role, text, sum))
             uiState._transcript.value = mutable
+            uiState._currentChatId.value?.let { transcriptCache[it] = mutable }
         }
         touchCurrentChat(uiState._transcript.value, updateTitle = role == TranscriptRole.USER)
         return id
@@ -376,6 +426,7 @@ class ChatManager(
                     } else message.summary
                     mutableList[index] = message.copy(text = text, summary = sum)
                     uiState._transcript.value = mutableList
+                    uiState._currentChatId.value?.let { transcriptCache[it] = mutableList }
                 }
             }
         }
@@ -389,22 +440,71 @@ class ChatManager(
 
     /** Persists transcript messages for [chatId] under [ioMutex] to avoid disk races. */
     suspend fun persistTranscript(chatId: String, messages: List<TranscriptMessage>) {
+        transcriptCache[chatId] = messages
         ioMutex.withLock {
+            // A delayed write for a deleted chat must not recreate its JSON
+            // transcript or its Room parent row.
+            val session = uiState._chatSessions.value.firstOrNull { it.id == chatId }
+                ?: return@withLock
+            searchIndex.update(chatId, messages, session.title)
             runCatching {
-                val sessionTitle = uiState._chatSessions.value.firstOrNull { it.id == chatId }?.title
-                searchIndex.update(chatId, messages, sessionTitle)
+                conversationRepository?.syncChat(session, messages)
+            }.onFailure { error ->
+                Log.e(TAG, "failed to persist transcript to Room for $chatId", error)
+            }
+
+            runCatching {
                 transcriptStore.writeTranscriptFile(transcriptStore.transcriptFile(chatId), messages)
             }.onFailure { error ->
-                Log.w(TAG, "failed to persist transcript for $chatId", error)
+                Log.w(TAG, "failed to write JSON transcript backup for $chatId", error)
             }
         }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────
 
+    private fun persistSnapshotJsonBackup(snapshot: ConversationSnapshot) {
+        scope.launch(Dispatchers.IO) {
+            ioMutex.withLock {
+                runCatching {
+                    writeChatIndexJson(snapshot.sessions)
+                    snapshot.messagesByChat.forEach { (chatId, messages) ->
+                        transcriptStore.writeTranscriptFile(
+                            transcriptStore.transcriptFile(chatId),
+                            messages,
+                        )
+                    }
+                    Log.d(TAG, "JSON conversation backup refreshed from Room")
+                }.onFailure { error ->
+                    Log.w(TAG, "failed to refresh JSON conversation backup from Room", error)
+                }
+            }
+        }
+    }
+
+    private fun writeChatIndexJson(sessions: List<ChatSession>) {
+        val array = JSONArray()
+        sessions.forEach { session ->
+            array.put(
+                JSONObject()
+                    .put("id", session.id)
+                    .put("title", session.title)
+                    .put("createdAt", session.createdAt)
+                    .put("updatedAt", session.updatedAt)
+                    .put("modelId", session.modelId)
+                    .put("messageCount", session.messageCount)
+            )
+        }
+        val target = transcriptStore.chatIndexFile()
+        val temp = File(context.filesDir, "chat_index.json.tmp")
+        temp.writeText(array.toString())
+        transcriptStore.promoteTempFile(temp, target)
+    }
+
     private fun persistTranscriptNow() {
         val chatId = uiState._currentChatId.value ?: return
         val messages = uiState._transcript.value
+        transcriptCache[chatId] = messages
         scope.launch(Dispatchers.IO) {
             persistTranscript(chatId, messages)
         }

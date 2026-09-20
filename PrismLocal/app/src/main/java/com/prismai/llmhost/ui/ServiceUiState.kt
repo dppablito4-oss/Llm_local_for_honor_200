@@ -7,6 +7,7 @@ import com.prismai.llmhost.ui.*
 import com.prismai.llmhost.model.*
 
 import com.prismai.llmhost.*
+import com.prismai.llmhost.generation.PreparedContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,6 +68,9 @@ class ServiceUiState {
 
     internal val _generationPerformance = MutableStateFlow<GenerationPerformance?>(null)
     val generationPerformance: StateFlow<GenerationPerformance?> = _generationPerformance.asStateFlow()
+
+    internal val _preparedContext = MutableStateFlow<PreparedContext?>(null)
+    val preparedContext: StateFlow<PreparedContext?> = _preparedContext.asStateFlow()
 
     internal val _thermalGovernorState = MutableStateFlow(com.prismai.llmhost.util.ThermalGovernorState())
     val thermalGovernorState: StateFlow<com.prismai.llmhost.util.ThermalGovernorState> = _thermalGovernorState.asStateFlow()

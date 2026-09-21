@@ -355,7 +355,11 @@ class ModelStorageManager(private val context: Context) {
         val installedBytes = listInstalledModelInfos().sumOf { it.bytes }
         val downloadsDir = File(context.filesDir, "hf-downloads")
         val cacheBytes = if (downloadsDir.exists()) downloadsDir.walkTopDown().filter { it.isFile }.sumOf { it.length() } else 0L
-        val stat = StatFs(modelsDir.absolutePath)
+        // A fresh install may query diagnostics before the first model creates
+        // files/models. StatFs rejects a path that does not exist, so use the
+        // always-existing app files directory as the volume probe in that case.
+        val storageProbe = modelsDir.takeIf { it.exists() } ?: context.filesDir
+        val stat = StatFs(storageProbe.absolutePath)
         val freeBytes = stat.availableBytes
         val totalBytes = stat.totalBytes
         return StorageBreakdown(

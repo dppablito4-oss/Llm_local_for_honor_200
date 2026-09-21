@@ -15,6 +15,41 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RoomConversationMirrorTest {
     @Test
+    fun rollingSummaryPersistsWithoutDeletingCoveredMessages() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val database = Room.inMemoryDatabaseBuilder(context, PrismDatabase::class.java).build()
+        try {
+            val repository = RoomConversationRepository(database)
+            val original = session("summary-chat", "Resumen", messageCount = 12)
+            val messages = (1L..12L).map { id ->
+                message(
+                    id,
+                    if (id % 2L == 0L) TranscriptRole.ASSISTANT else TranscriptRole.USER,
+                    "mensaje-$id",
+                )
+            }
+            repository.syncChat(original, messages)
+
+            assertEquals(true, repository.updateSummary(original.id, "Hechos acumulados", 6L, 500L))
+
+            val restored = repository.loadSnapshot()
+            val restoredChat = restored.sessions.single()
+            assertEquals("Hechos acumulados", restoredChat.summary)
+            assertEquals(6L, restoredChat.summaryUntilMessageId)
+            assertEquals(messages, restored.messagesByChat.getValue(original.id))
+
+            repository.syncChat(
+                restoredChat.copy(summary = null, summaryUntilMessageId = null, messageCount = 0),
+                emptyList(),
+            )
+            assertNull(database.conversationDao().chatById(original.id)?.summary)
+            assertNull(database.conversationDao().chatById(original.id)?.summaryUntilMessageId)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun mirrorsCreateEditClearAndDeleteWithoutTouchingOtherChat() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val database = Room.inMemoryDatabaseBuilder(context, PrismDatabase::class.java).build()

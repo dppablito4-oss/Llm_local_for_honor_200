@@ -61,6 +61,7 @@ class GenerationOrchestrator(
     private val onDeferredReload: suspend (String) -> Boolean,
     private val getReloadPending: () -> Boolean,
     private val setReloadPending: (Boolean) -> Unit,
+    private val onRequestRollingSummary: (PreparedContext) -> Unit = {},
     /** Fired exactly once after a benchmark-preset generation fully completes/cleans up. */
     private val onBenchmarkComplete: () -> Unit = {},
 ) {
@@ -178,6 +179,11 @@ class GenerationOrchestrator(
         }
 
         val memoryContext = if (benchmarkPreset == null) promptBuilder.buildMemoryContext(prompt) else ""
+        val activeChat = chatManager.currentSession()
+        val rollingSummaryContext = activeChat?.summary
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "[Resumen acumulado de mensajes anteriores]\n$it" }
+            .orEmpty()
         // Structured, role-preserving messages for normal chat. The legacy string
         // path stays for agent turns and benchmark presets, which build their own
         // protocol prompts and must keep byte-identical behavior.
@@ -191,6 +197,8 @@ class GenerationOrchestrator(
                 transcript = uiState.transcript.value,
                 activeAssistantTranscriptId = null,
                 memoryContext = memoryContext,
+                summaryContext = rollingSummaryContext,
+                summaryUntilMessageId = activeChat?.summaryUntilMessageId,
                 tokenBudget = promptBudget,
                 contextLength = settings.contextLength,
                 reservedOutputTokens = settings.maxTokens,
@@ -224,6 +232,8 @@ class GenerationOrchestrator(
                     transcript = uiState.transcript.value,
                     activeAssistantTranscriptId = null,
                     memoryContext = memoryContext,
+                    summaryContext = rollingSummaryContext,
+                    summaryUntilMessageId = activeChat?.summaryUntilMessageId,
                     tokenBudget = reducedBudget,
                     contextLength = settings.contextLength,
                     reservedOutputTokens = settings.maxTokens,
@@ -341,6 +351,15 @@ class GenerationOrchestrator(
                 isCodingPreset = benchmarkPreset?.id == "coding",
                 notifyBenchmarkComplete = benchmarkPreset != null,
             ),
+            afterCleanup = { result ->
+                if (
+                    benchmarkPreset == null &&
+                    !agentEnabled &&
+                    (result.finalReason == "EOF" || result.finalReason == "MAX_TOKENS")
+                ) {
+                    preparedContext?.let(onRequestRollingSummary)
+                }
+            },
         ) { result ->
             val agentToolCall = if (agentEnabled && result.finalReason == "EOF") {
                 AgentToolProtocol.parseToolCall(result.finalOutput)
@@ -579,6 +598,7 @@ class GenerationOrchestrator(
         config: GenerationFlowConfig,
         messages: List<ChatMessage>? = null,
         continueFromContext: Boolean = false,
+        afterCleanup: ((GenerationFlowResult) -> Unit)? = null,
         onComplete: (GenerationFlowResult) -> Unit,
     ): Job {
         var firstTokenAt: Long? = null
@@ -761,15 +781,14 @@ class GenerationOrchestrator(
                 )
                 val finalOutput = uiState.streamState.snapshotText()
 
-                onComplete(
-                    GenerationFlowResult(
-                        finalReason = finalReason,
-                        finalPerformance = finalPerformance,
-                        finalOutput = finalOutput,
-                        generatedTokens = generatedTokens,
-                        terminalDetail = terminalDetail,
-                    ),
+                val flowResult = GenerationFlowResult(
+                    finalReason = finalReason,
+                    finalPerformance = finalPerformance,
+                    finalOutput = finalOutput,
+                    generatedTokens = generatedTokens,
+                    terminalDetail = terminalDetail,
                 )
+                onComplete(flowResult)
 
                 // ── Shared cleanup tail ────────────────────────────────────
                 if (config.logMemory) {
@@ -801,6 +820,7 @@ class GenerationOrchestrator(
                 if (config.notifyBenchmarkComplete) {
                     onBenchmarkComplete()
                 }
+                afterCleanup?.invoke(flowResult)
             }
             .launchIn(scope)
     }

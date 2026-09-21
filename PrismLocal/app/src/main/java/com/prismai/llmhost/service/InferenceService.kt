@@ -74,6 +74,8 @@ import com.prismai.llmhost.model.ModelReadinessAssessor
 import com.prismai.llmhost.generation.GenerationMetrics
 import com.prismai.llmhost.generation.GenerationOrchestrator
 import com.prismai.llmhost.generation.PromptBuilder
+import com.prismai.llmhost.generation.ConversationSummarizer
+import com.prismai.llmhost.generation.PreparedContext
 import com.prismai.llmhost.persistence.LegacyConversationImporter
 import com.prismai.llmhost.persistence.PrismDatabase
 import com.prismai.llmhost.persistence.RoomConversationRepository
@@ -138,6 +140,7 @@ class InferenceService : Service() {
     private lateinit var memoryGovernor: MemoryGovernor
     private lateinit var modelStorageManager: ModelStorageManager
     private var generationJob: Job? = null
+    private var rollingSummaryJob: Job? = null
     private var importJob: Job? = null
     private var downloadObserverJob: Job? = null
     private var criticalMemoryAlertActive = false
@@ -164,6 +167,7 @@ class InferenceService : Service() {
     private lateinit var chatManager: ChatManager
     private lateinit var prismDatabase: PrismDatabase
     private lateinit var conversationRepository: RoomConversationRepository
+    private lateinit var conversationSummarizer: ConversationSummarizer
     private val chatRepositoryReady = CompletableDeferred<Unit>()
 
     // ── Extracted model management (Phase B refactor) ─────────────────────
@@ -303,6 +307,7 @@ class InferenceService : Service() {
         createNotificationChannel()
         CapabilityRegistryHolder.auditLog.init(filesDir)
         engine = NativeLlmBridge.create()
+        conversationSummarizer = ConversationSummarizer(engine, chatManager)
         memoryGovernor = MemoryGovernor(this)
         modelStorageManager = ModelStorageManager(this)
         // ── Phase B: extracted model management classes ──────────────
@@ -433,6 +438,7 @@ class InferenceService : Service() {
             onDeferredReload = { modelId -> switchModel(modelId) },
             getReloadPending = { reloadPending },
             setReloadPending = { v -> reloadPending = v },
+            onRequestRollingSummary = { context -> scheduleRollingSummary(context) },
         )
 
         // ── Phase D: agent tool handler classes ─────────────────────────
@@ -651,6 +657,7 @@ class InferenceService : Service() {
     }
 
     suspend fun switchModel(modelId: String): Boolean {
+        cancelRollingSummaryAndJoin()
         return operationMutex.withLock {
             Log.d(TAG, "switchModel requested modelId=$modelId")
             cancelAndJoinGenerationLocked("model switch")
@@ -659,6 +666,7 @@ class InferenceService : Service() {
     }
 
     suspend fun deleteModel(modelId: String): Boolean {
+        cancelRollingSummaryAndJoin()
         return operationMutex.withLock {
             Log.d(TAG, "deleteModel requested modelId=$modelId")
             cancelAndJoinGenerationLocked("model delete")
@@ -675,6 +683,7 @@ class InferenceService : Service() {
     fun cancelGeneration() {
         benchmarkRunner.cancelGeneration()
         serviceScope.launch {
+            cancelRollingSummaryAndJoin()
             operationMutex.withLock {
                 cancelAndJoinGenerationLocked("user cancel")
             }
@@ -717,6 +726,7 @@ class InferenceService : Service() {
             publishUiEvent("Conversations are still loading")
             return false
         }
+        rollingSummaryJob?.cancel()
         if (_isGenerating.value) {
             publishUiEvent("Cancel generation before switching chats")
             return false
@@ -829,6 +839,7 @@ class InferenceService : Service() {
         initiatedByBackground: Boolean = false,
     ): String {
         chatRepositoryReady.await()
+        cancelRollingSummaryAndJoin()
         var activeJob: Job? = null
         operationMutex.withLock {
             if (initiatedByBackground &&
@@ -868,6 +879,7 @@ class InferenceService : Service() {
     }
 
     suspend fun cancelGenerationAndJoin(reason: String = "user cancellation") {
+        cancelRollingSummaryAndJoin()
         operationMutex.withLock {
             cancelAndJoinGenerationLocked(reason)
         }
@@ -881,6 +893,7 @@ class InferenceService : Service() {
 
     fun continueGenerationSafely() {
         serviceScope.launch {
+            cancelRollingSummaryAndJoin()
             operationMutex.withLock {
                 cancelAndJoinGenerationLocked("continue generation")
                 generationOrchestrator.continueGeneration()
@@ -1305,6 +1318,40 @@ class InferenceService : Service() {
         chatManager.touchCurrentChat(messages, updateTitle)
     }
 
+    private fun scheduleRollingSummary(preparedContext: PreparedContext) {
+        val session = chatManager.currentSession() ?: return
+        val transcript = chatManager.messagesForChat(session.id).toList()
+        val plan = conversationSummarizer.plan(session, transcript, preparedContext) ?: return
+        val modelId = _currentModel.value ?: return
+        val settings = _generationSettings.value
+
+        rollingSummaryJob?.cancel()
+        rollingSummaryJob = serviceScope.launch {
+            // Give an immediate next user turn priority over this maintenance task.
+            delay(350L)
+            operationMutex.withLock {
+                if (_isGenerating.value || _currentModel.value != modelId) return@withLock
+                Log.i(
+                    TAG,
+                    "rolling_summary start chat=${plan.chatId} messages=${plan.messages.size} " +
+                        "until=${plan.untilMessageId}",
+                )
+                val result = conversationSummarizer.summarize(plan, modelId, settings)
+                Log.i(
+                    TAG,
+                    "rolling_summary finish chat=${plan.chatId} persisted=${result.persisted} " +
+                        "reason=${result.terminalReason} chars=${result.summary.length}",
+                )
+            }
+        }
+    }
+
+    private suspend fun cancelRollingSummaryAndJoin() {
+        val job = rollingSummaryJob
+        rollingSummaryJob = null
+        job?.cancelAndJoin()
+    }
+
     private suspend fun cancelAndJoinGenerationLocked(
         reason: String,
         clearQueuedBenchmarks: Boolean = true,
@@ -1415,6 +1462,8 @@ class InferenceService : Service() {
         saveTranscriptSafely()
         importJob?.cancel()
         importJob = null
+        rollingSummaryJob?.cancel()
+        rollingSummaryJob = null
 
         // Run cancellation + native teardown off the main thread and wait only a
         // bounded budget for it. If the budget expires the job is deliberately

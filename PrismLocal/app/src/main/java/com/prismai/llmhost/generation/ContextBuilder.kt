@@ -83,6 +83,7 @@ object ContextBuilder {
         memoryContext: String,
         ragContext: String = "",
         summaryContext: String = "",
+        summaryUntilMessageId: Long? = null,
         promptTokenBudget: Int,
         contextLength: Int = promptTokenBudget,
         reservedOutputTokens: Int = 0,
@@ -114,7 +115,11 @@ object ContextBuilder {
         remaining = (remaining - summary.tokens).coerceAtLeast(0)
 
         val candidates = transcript.asSequence()
-            .filter { it.id != activeAssistantTranscriptId && it.text.isNotBlank() }
+            .filter {
+                it.id != activeAssistantTranscriptId &&
+                    it.text.isNotBlank() &&
+                    (summaryUntilMessageId == null || it.id > summaryUntilMessageId)
+            }
             .mapNotNull { it.toChatMessageOrNull() }
             .toList()
         val selected = ArrayDeque<ChatMessage>()

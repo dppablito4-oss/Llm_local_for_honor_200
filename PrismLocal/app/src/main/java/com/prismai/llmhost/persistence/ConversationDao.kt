@@ -38,6 +38,17 @@ interface ConversationDao {
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY id ASC")
     suspend fun messagesForChat(chatId: String): List<MessageEntity>
 
+    @Query(
+        "UPDATE chats SET summary = :summary, summaryUntilMessageId = :untilId, " +
+            "updatedAt = :updatedAt WHERE id = :chatId",
+    )
+    suspend fun updateSummary(
+        chatId: String,
+        summary: String,
+        untilId: Long,
+        updatedAt: Long,
+    ): Int
+
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteMessagesForChat(chatId: String): Int
 

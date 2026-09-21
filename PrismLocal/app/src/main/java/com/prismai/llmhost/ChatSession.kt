@@ -14,6 +14,8 @@ data class ChatSession(
     val updatedAt: Long,
     val modelId: String?,
     val messageCount: Int,
+    val summary: String? = null,
+    val summaryUntilMessageId: Long? = null,
 )
 
 internal object ChatTitles {

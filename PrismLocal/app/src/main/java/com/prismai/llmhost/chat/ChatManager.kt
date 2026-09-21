@@ -198,6 +198,14 @@ class ChatManager(
         }
         synchronized(lock) {
             uiState._transcript.value = emptyList()
+            val chatId = uiState._currentChatId.value
+            uiState._chatSessions.value = uiState._chatSessions.value.map { session ->
+                if (session.id == chatId) {
+                    session.copy(summary = null, summaryUntilMessageId = null)
+                } else {
+                    session
+                }
+            }
             nextTranscriptId = 1L
             activeAssistantTranscriptId = null
             lastTranscriptPersistAt = 0L
@@ -292,6 +300,40 @@ class ChatManager(
             transcriptCache[chatId].orEmpty()
         }
 
+    fun currentSession(): ChatSession? = uiState._currentChatId.value?.let { chatId ->
+        uiState._chatSessions.value.firstOrNull { it.id == chatId }
+    }
+
+    suspend fun updateSummary(chatId: String, summary: String, untilId: Long): Boolean {
+        val normalized = summary.trim()
+        if (normalized.isBlank()) return false
+        val now = System.currentTimeMillis()
+        val persisted = ioMutex.withLock {
+            val updated = conversationRepository?.updateSummary(chatId, normalized, untilId, now) ?: false
+            if (updated) {
+                synchronized(lock) {
+                    uiState._chatSessions.value = uiState._chatSessions.value
+                        .map { session ->
+                            if (session.id == chatId) {
+                                session.copy(
+                                    summary = normalized,
+                                    summaryUntilMessageId = untilId,
+                                    updatedAt = now,
+                                )
+                            } else {
+                                session
+                            }
+                        }
+                        .sortedByDescending { it.updatedAt }
+                }
+            }
+            updated
+        }
+        if (!persisted) return false
+        persistChatIndex()
+        return true
+    }
+
     fun readChatIndex(): List<ChatSession> =
         runCatching {
             val file = transcriptStore.chatIndexFile()
@@ -310,6 +352,9 @@ class ChatManager(
                             updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
                             modelId = item.optString("modelId").takeIf { it.isNotBlank() },
                             messageCount = item.optInt("messageCount", 0),
+                            summary = item.optString("summary").takeIf { it.isNotBlank() },
+                            summaryUntilMessageId = item.optLong("summaryUntilMessageId", -1L)
+                                .takeIf { it >= 0L },
                         )
                     )
                 }
@@ -493,6 +538,8 @@ class ChatManager(
                     .put("updatedAt", session.updatedAt)
                     .put("modelId", session.modelId)
                     .put("messageCount", session.messageCount)
+                    .put("summary", session.summary)
+                    .put("summaryUntilMessageId", session.summaryUntilMessageId)
             )
         }
         val target = transcriptStore.chatIndexFile()

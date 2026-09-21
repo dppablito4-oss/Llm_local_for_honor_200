@@ -23,6 +23,8 @@ interface ConversationRepository {
     suspend fun syncSessions(sessions: List<ChatSession>)
 
     suspend fun syncChat(session: ChatSession, messages: List<TranscriptMessage>)
+
+    suspend fun updateSummary(chatId: String, summary: String, untilId: Long, updatedAt: Long): Boolean
 }
 
 class RoomConversationRepository(
@@ -88,6 +90,19 @@ class RoomConversationRepository(
             }
         }
     }
+
+    override suspend fun updateSummary(
+        chatId: String,
+        summary: String,
+        untilId: Long,
+        updatedAt: Long,
+    ): Boolean = database.withTransaction {
+        val dao = database.conversationDao()
+        val current = dao.chatById(chatId) ?: return@withTransaction false
+        val currentUntil = current.summaryUntilMessageId
+        if (currentUntil != null && currentUntil >= untilId) return@withTransaction false
+        dao.updateSummary(chatId, summary, untilId, updatedAt) == 1
+    }
 }
 
 internal fun ChatSession.toChatEntity(): ChatEntity = ChatEntity(
@@ -97,6 +112,8 @@ internal fun ChatSession.toChatEntity(): ChatEntity = ChatEntity(
     updatedAt = updatedAt,
     modelId = modelId,
     messageCount = messageCount,
+    summary = summary,
+    summaryUntilMessageId = summaryUntilMessageId,
 )
 
 internal fun TranscriptMessage.toMessageEntity(chatId: String): MessageEntity = MessageEntity(
@@ -114,6 +131,8 @@ internal fun ChatEntity.toChatSession(): ChatSession = ChatSession(
     updatedAt = updatedAt,
     modelId = modelId,
     messageCount = messageCount,
+    summary = summary,
+    summaryUntilMessageId = summaryUntilMessageId,
 )
 
 internal fun MessageEntity.toTranscriptMessage(): TranscriptMessage = TranscriptMessage(

@@ -12,8 +12,8 @@ import com.prismai.llmhost.model.*
  * Keep a single source of truth — do not duplicate hard-cap constants elsewhere.
  */
 object ModelLoadLimits {
-    /** Preflight hard cap: large enough for Bonsai-27B Q1_0 weights (~3.54 GiB). */
-    const val HARD_CAP_BYTES = 4200L * 1024L * 1024L
+    /** Preflight hard cap: includes 7B Q4_K_M weights while retaining the RAM-fit gate. */
+    const val HARD_CAP_BYTES = 5L * 1024L * 1024L * 1024L
 
     /**
      * Models above this size are treated as "large" for scoring only: they use a

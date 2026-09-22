@@ -1,5 +1,6 @@
 package com.prismai.llmhost
 
+import com.prismai.llmhost.model.ModelLoadLimits
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -107,6 +108,20 @@ class DownloadIntegrityPolicyTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun deepSeekSevenBEntryPinsVerifiedArtifactAndFitsLoadCap() {
+        val entry = requireNotNull(
+            HuggingFaceModelCatalog.find("deepseek_r1_distill_qwen_7b_q4km"),
+        )
+
+        assertEquals(4_683_073_504L, entry.expectedBytes)
+        assertEquals(
+            "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+            entry.expectedSha256,
+        )
+        assertTrue(entry.expectedBytes <= ModelLoadLimits.HARD_CAP_BYTES)
     }
 
     @Test

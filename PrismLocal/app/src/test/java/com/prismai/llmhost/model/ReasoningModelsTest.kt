@@ -40,10 +40,21 @@ class ReasoningModelsTest {
             GenerationSettings(maxTokens = 128, reasoningMode = ReasoningMode.THINKING),
             agentEnabled = false,
         )
-        assertEquals(768, effective.maxTokens)
+        assertEquals(1024, effective.maxTokens)
         assertEquals(0.60f, effective.temperature, 0f)
         assertEquals(20, effective.topK)
         assertEquals(0.95f, effective.topP, 0f)
+        assertEquals(1.15f, effective.repeatPenalty, 0f)
+    }
+
+    @Test
+    fun outputLimitsMatchHonorProfileAndKeepPromptHeadroom() {
+        assertEquals(512, GenerationSettings.DEFAULT_MAX_TOKENS)
+        assertEquals(2048, GenerationSettings.MAX_MAX_TOKENS)
+        assertEquals(64, GenerationSettings.MAX_TOKEN_STEP)
+        assertEquals(1024, GenerationSettings.maxUiOutputTokensForContext(2048))
+        assertEquals(2048, GenerationSettings.maxUiOutputTokensForContext(3072))
+        assertEquals(2048, GenerationSettings.maxUiOutputTokensForContext(4096))
     }
 
     @Test
@@ -62,7 +73,7 @@ class ReasoningModelsTest {
 
         assertEquals(ReasoningMode.THINKING, thinking.reasoningMode)
         assertEquals(4096, thinking.contextLength)
-        assertEquals(768, thinking.maxTokens)
+        assertEquals(1024, thinking.maxTokens)
         assertEquals(0.60f, thinking.temperature, 0f)
         assertEquals(0.95f, thinking.topP, 0f)
         assertEquals("pregunta\n\n/think", profile.prepareUserPrompt("pregunta", thinking.reasoningMode, false))
@@ -90,5 +101,17 @@ class ReasoningModelsTest {
         assertFalse(parsed.reasoningComplete)
         assertEquals("todavía pensando", parsed.reasoning)
         assertEquals("", parsed.answer)
+    }
+
+    @Test
+    fun disclosureAutoExpandsOnlyDuringLiveThinkingAndHonorsManualChoice() {
+        val streaming = ReasoningOutputParser.parse("<think>todavía pensando")
+        val completed = ReasoningOutputParser.parse("<think>listo</think>Respuesta")
+
+        assertTrue(ReasoningDisclosurePolicy.isExpanded(null, streaming, showLoading = true))
+        assertFalse(ReasoningDisclosurePolicy.isExpanded(null, completed, showLoading = true))
+        assertFalse(ReasoningDisclosurePolicy.isExpanded(null, streaming, showLoading = false))
+        assertFalse(ReasoningDisclosurePolicy.isExpanded(false, streaming, showLoading = true))
+        assertTrue(ReasoningDisclosurePolicy.isExpanded(true, completed, showLoading = false))
     }
 }

@@ -29,6 +29,8 @@ class RollingSummaryDeviceTest {
         val database = PrismDatabase.getInstance(context)
         val repository = RoomConversationRepository(database)
         val original = repository.loadSnapshot()
+        val prefs = context.getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
+        val originalActiveChatId = prefs.getString("active_chat", null)
         val now = System.currentTimeMillis()
         val chatId = "rolling_summary_device_$now"
         val messages = (1L..20L).map { id ->
@@ -52,8 +54,7 @@ class RollingSummaryDeviceTest {
         )
         repository.syncSessions(original.sessions + seeded)
         repository.syncChat(seeded, messages)
-        context.getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
-            .edit().putString("active_chat", chatId).commit()
+        prefs.edit().putString("active_chat", chatId).commit()
 
         val installed = ModelStorageManager(context).listInstalledModelInfos()
         val model = installed.firstOrNull { "qwen3" in it.id.lowercase() }
@@ -61,6 +62,8 @@ class RollingSummaryDeviceTest {
         assertNotNull("No installed GGUF model available for real summary test", model)
 
         val bound = bindService(context)
+        val originalSettings = bound.service.generationSettings.value
+        val originalModelId = bound.service.currentModel.value
         try {
             assertTrue(bound.service.switchModel(model!!.id))
             bound.service.updateGenerationSettings(
@@ -86,7 +89,17 @@ class RollingSummaryDeviceTest {
             assertEquals(22, database.conversationDao().messagesForChat(chatId).size)
         } finally {
             bound.service.cancelGenerationAndJoin("rolling summary device test cleanup")
+            bound.service.updateGenerationSettings(originalSettings)
             bound.service.deleteChat(chatId)
+            if (
+                originalActiveChatId != null &&
+                bound.service.chatSessions.value.any { it.id == originalActiveChatId }
+            ) {
+                bound.service.switchChat(originalActiveChatId)
+            }
+            if (originalModelId != null && originalModelId != bound.service.currentModel.value) {
+                bound.service.switchModel(originalModelId)
+            }
             context.unbindService(bound.connection)
         }
     }

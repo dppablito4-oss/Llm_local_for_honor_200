@@ -155,10 +155,18 @@ class ReasoningModelOnDeviceTest {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue(arguments.getString("runDeepSeekConversationRegression") == "true")
         val context = instrumentation.targetContext
-        val entry = requireNotNull(HuggingFaceModelCatalog.find("deepseek_r1_distill_qwen_15b_q4km"))
-        val model = requireNotNull(
-            ModelStorageManager(context).listInstalledModelInfos().firstOrNull { it.fileName == entry.fileName },
-        )
+        val storage = ModelStorageManager(context)
+        val requestedModelId = arguments.getString("modelId")
+        val model = if (requestedModelId != null) {
+            val resolved = storage.resolveActiveModel(requestedModelId)
+            require(resolved is ModelStorageManager.ModelResolveResult.Success) {
+                "Unable to resolve $requestedModelId: $resolved"
+            }
+            resolved.model
+        } else {
+            val entry = requireNotNull(HuggingFaceModelCatalog.find("deepseek_r1_distill_qwen_15b_q4km"))
+            requireNotNull(storage.listInstalledModelInfos().firstOrNull { it.fileName == entry.fileName })
+        }
         val behavior = ModelBehaviorProfiles.resolve(model.fileName)
         val settings = behavior.effectiveSettings(
             GenerationSettings(

@@ -8,6 +8,11 @@ import com.prismai.llmhost.ui.*
 import com.prismai.llmhost.model.*
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -44,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import android.view.HapticFeedbackConstants
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.prismai.llmhost.GenerationPerformance
@@ -64,10 +70,15 @@ internal fun MessageBubble(
     val view = LocalView.current
     val copyLabel = if (isUser) "prompt" else "response"
     var showReportDialog by remember { mutableStateOf(false) }
-    var reasoningExpanded by remember { mutableStateOf(false) }
+    var userToggledReasoning by remember { mutableStateOf<Boolean?>(null) }
     val parsedOutput = remember(text, isUser) {
         if (isUser) null else ReasoningOutputParser.parse(text)
     }
+    val reasoningExpanded = ReasoningDisclosurePolicy.isExpanded(
+        userOverride = userToggledReasoning,
+        parsed = parsedOutput,
+        showLoading = showLoading,
+    )
 
     if (showReportDialog) {
         ReportAiContentDialog(
@@ -144,29 +155,37 @@ internal fun MessageBubble(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         border = BorderStroke(1.dp, prismGlassBorderColor()),
-                        onClick = { reasoningExpanded = !reasoningExpanded },
+                        onClick = { userToggledReasoning = !reasoningExpanded },
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                             Text(
                                 text = when {
                                     !parsedOutput.reasoningComplete && showLoading -> {
                                         val generated = performance?.generatedTokens?.takeIf { it > 0 }
-                                        if (generated != null) "Razonando… $generated tokens" else "Razonando…"
+                                        if (generated != null) "Pensando en vivo… $generated tokens" else "Pensando en vivo…"
                                     }
                                     parsedOutput.reasoningComplete -> "Razonamiento ${if (reasoningExpanded) "⌃" else "⌄"}"
                                     else -> "Razonamiento incompleto ${if (reasoningExpanded) "⌃" else "⌄"}"
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
+                                color = if (!parsedOutput.reasoningComplete && showLoading) PrismViolet else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (reasoningExpanded && parsedOutput.reasoning.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(7.dp))
-                                SelectionContainer {
-                                    Text(
-                                        text = parsedOutput.reasoning,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                            AnimatedVisibility(
+                                visible = reasoningExpanded && parsedOutput.reasoning.isNotBlank(),
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut(),
+                            ) {
+                                Column {
+                                    Spacer(modifier = Modifier.height(7.dp))
+                                    SelectionContainer {
+                                        Text(
+                                            text = parsedOutput.reasoning,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -17,24 +17,32 @@ import com.prismai.llmhost.engine.runtime.InferencePlan
  */
 class EngineConfigStore(private val prefs: SharedPreferences) {
 
-    fun load(): GenerationSettings = GenerationSettings(
-        maxTokens = prefs.getInt(KEY_MAX_TOKENS, GenerationSettings.DEFAULT_MAX_TOKENS),
-        threadCount = prefs.getInt(KEY_THREAD_COUNT, GenerationSettings.DEFAULT_THREAD_COUNT),
-        contextLength = prefs.getInt(KEY_CONTEXT_LENGTH, GenerationSettings.DEFAULT_CONTEXT_LENGTH),
-        batchSize = prefs.getInt(KEY_BATCH_SIZE, GenerationSettings.DEFAULT_BATCH_SIZE),
-        temperature = prefs.getFloat(KEY_TEMPERATURE, GenerationSettings.DEFAULT_TEMPERATURE),
-        topK = prefs.getInt(KEY_TOP_K, GenerationSettings.DEFAULT_TOP_K),
-        topP = prefs.getFloat(KEY_TOP_P, GenerationSettings.DEFAULT_TOP_P),
-        repeatPenalty = prefs.getFloat(KEY_REPEAT_PENALTY, GenerationSettings.DEFAULT_REPEAT_PENALTY),
-        reasoningMode = ReasoningMode.fromStorage(prefs.getString(KEY_REASONING_MODE, null)),
-        gpuLayers = prefs.getInt(KEY_GPU_LAYERS, GenerationSettings.DEFAULT_GPU_LAYERS),
-        useVulkan = prefs.getBoolean(KEY_USE_VULKAN, false),
-        agentEnabled = prefs.getBoolean(KEY_AGENT_ENABLED, false),
-        maxAgentIterations = prefs.getInt(KEY_MAX_AGENT_ITERATIONS, GenerationSettings.DEFAULT_MAX_AGENT_ITERATIONS),
-        kvCacheTypeK = prefs.getString(KEY_KV_CACHE_TYPE_K, "q8_0") ?: "q8_0",
-        kvCacheTypeV = prefs.getString(KEY_KV_CACHE_TYPE_V, "q8_0") ?: "q8_0",
-        enableFlashAttn = prefs.getBoolean(KEY_ENABLE_FLASH_ATTN, true),
-    ).clamped()
+    fun load(): GenerationSettings {
+        val loaded = GenerationSettings(
+            maxTokens = prefs.getInt(KEY_MAX_TOKENS, GenerationSettings.DEFAULT_MAX_TOKENS),
+            threadCount = prefs.getInt(KEY_THREAD_COUNT, GenerationSettings.DEFAULT_THREAD_COUNT),
+            contextLength = prefs.getInt(KEY_CONTEXT_LENGTH, GenerationSettings.DEFAULT_CONTEXT_LENGTH),
+            batchSize = prefs.getInt(KEY_BATCH_SIZE, GenerationSettings.DEFAULT_BATCH_SIZE),
+            temperature = prefs.getFloat(KEY_TEMPERATURE, GenerationSettings.DEFAULT_TEMPERATURE),
+            topK = prefs.getInt(KEY_TOP_K, GenerationSettings.DEFAULT_TOP_K),
+            topP = prefs.getFloat(KEY_TOP_P, GenerationSettings.DEFAULT_TOP_P),
+            repeatPenalty = prefs.getFloat(KEY_REPEAT_PENALTY, GenerationSettings.DEFAULT_REPEAT_PENALTY),
+            reasoningMode = ReasoningMode.fromStorage(prefs.getString(KEY_REASONING_MODE, null)),
+            gpuLayers = prefs.getInt(KEY_GPU_LAYERS, GenerationSettings.DEFAULT_GPU_LAYERS),
+            useVulkan = prefs.getBoolean(KEY_USE_VULKAN, false),
+            agentEnabled = prefs.getBoolean(KEY_AGENT_ENABLED, false),
+            maxAgentIterations = prefs.getInt(KEY_MAX_AGENT_ITERATIONS, GenerationSettings.DEFAULT_MAX_AGENT_ITERATIONS),
+            kvCacheTypeK = prefs.getString(KEY_KV_CACHE_TYPE_K, "q8_0") ?: "q8_0",
+            kvCacheTypeV = prefs.getString(KEY_KV_CACHE_TYPE_V, "q8_0") ?: "q8_0",
+            enableFlashAttn = prefs.getBoolean(KEY_ENABLE_FLASH_ATTN, true),
+        ).clamped()
+        return loaded.copy(
+            maxTokens = minOf(
+                loaded.maxTokens,
+                GenerationSettings.maxUiOutputTokensForContext(loaded.contextLength),
+            ),
+        )
+    }
 
     fun save(settings: GenerationSettings) {
         prefs.edit()
@@ -54,7 +62,10 @@ class EngineConfigStore(private val prefs: SharedPreferences) {
             .putString(KEY_KV_CACHE_TYPE_K, settings.kvCacheTypeK)
             .putString(KEY_KV_CACHE_TYPE_V, settings.kvCacheTypeV)
             .putBoolean(KEY_ENABLE_FLASH_ATTN, settings.enableFlashAttn)
-            .apply()
+            // Settings are small and change infrequently. Persist synchronously so a
+            // service/process shutdown immediately after an update cannot leave the
+            // previous runtime configuration on disk.
+            .commit()
     }
 
     companion object {

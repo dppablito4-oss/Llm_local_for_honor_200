@@ -87,6 +87,31 @@ class EngineConfigStoreTest {
     }
 
     @Test
+    fun loadCapsOutputToLeaveUsablePromptHeadroom() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit()
+            .putInt(EngineConfigStore.KEY_CONTEXT_LENGTH, 2048)
+            .putInt(EngineConfigStore.KEY_MAX_TOKENS, 2048)
+            .commit()
+
+        val loaded = EngineConfigStore(prefs).load()
+
+        assertEquals(2048, loaded.contextLength)
+        assertEquals(1024, loaded.maxTokens)
+    }
+
+    @Test
+    fun loadKeepsTwoThousandOutputTokensWithLargeContext() {
+        val prefs = FakeSharedPreferences()
+        prefs.edit()
+            .putInt(EngineConfigStore.KEY_CONTEXT_LENGTH, 4096)
+            .putInt(EngineConfigStore.KEY_MAX_TOKENS, 2048)
+            .commit()
+
+        assertEquals(2048, EngineConfigStore(prefs).load().maxTokens)
+    }
+
+    @Test
     fun savePersistsVulkanUnderDedicatedKey() {
         val prefs = FakeSharedPreferences()
         EngineConfigStore(prefs).save(sampleSettings())

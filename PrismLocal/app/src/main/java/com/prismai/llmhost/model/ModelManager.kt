@@ -62,7 +62,7 @@ class ModelManager(
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .remove(KEY_ACTIVE_MODEL)
-                .apply()
+                .commit()
         }
         val deleted = modelStorageManager.deleteModel(modelId)
         if (deleted) {
@@ -211,7 +211,9 @@ class ModelManager(
                     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         .edit()
                         .putString(KEY_ACTIVE_MODEL, modelId)
-                        .apply()
+                        // A successful model switch is infrequent and must survive an
+                        // immediate service/process shutdown.
+                        .commit()
                     onRefreshReadiness()
                 } else {
                     lastLoadedPlanKey = null

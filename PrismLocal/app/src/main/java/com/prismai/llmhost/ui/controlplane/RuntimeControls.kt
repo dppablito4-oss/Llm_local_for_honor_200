@@ -52,21 +52,32 @@ internal fun RuntimeControls(
     val behavior = remember(currentModel) { ModelBehaviorProfiles.resolve(currentModel) }
     val supportsReasoning = behavior.reasoningCapability != ReasoningCapability.NONE
     val reasoningEnabled = behavior.isReasoningEnabled(settings.reasoningMode)
+    val maxOutputForContext = GenerationSettings.maxUiOutputTokensForContext(settings.contextLength)
     DashboardCard {
         SectionHeader(
             title = "Motor de inferencia",
             subtitle = "Ajusta la longitud, velocidad y estilo de las respuestas",
         )
         SettingSlider(
-            label = "Tokens máximos",
+            label = "Límite de respuesta (Tokens de salida)",
             valueText = settings.maxTokens.toString(),
-            description = "Límite de longitud de cada respuesta. Un valor mayor permite respuestas más largas, pero tarda más.",
-            value = settings.maxTokens.toFloat(),
-            valueRange = GenerationSettings.MIN_MAX_TOKENS.toFloat()..GenerationSettings.MAX_MAX_TOKENS.toFloat(),
-            steps = 15,
+            description = "Un límite mayor permite respuestas Thinking completas, pero tarda más. Para habilitar más de $maxOutputForContext tokens, aumenta primero el contexto.",
+            value = settings.maxTokens.coerceIn(
+                GenerationSettings.UI_MIN_MAX_TOKENS,
+                maxOutputForContext,
+            ).toFloat(),
+            valueRange = GenerationSettings.UI_MIN_MAX_TOKENS.toFloat()..maxOutputForContext.toFloat(),
+            steps = (
+                (maxOutputForContext - GenerationSettings.UI_MIN_MAX_TOKENS) /
+                    GenerationSettings.MAX_TOKEN_STEP - 1
+                ).coerceAtLeast(0),
             enabled = enabled,
             onValueChange = { value ->
-                onSettingsChange(settings.copy(maxTokens = snapTokens(value)))
+                onSettingsChange(
+                    settings.copy(
+                        maxTokens = snapTokens(value).coerceAtMost(maxOutputForContext),
+                    ),
+                )
             },
         )
         SettingSlider(
@@ -94,12 +105,12 @@ internal fun RuntimeControls(
                 Text(
                     text = when (behavior.reasoningCapability) {
                         ReasoningCapability.TOGGLEABLE ->
-                            "Qwen3 puede alternar entre chat rápido y thinking. Al activarlo se usan 768 tokens de salida como mínimo."
+                            "Qwen3 puede alternar entre chat rápido y thinking. Al activarlo se usan 1024 tokens de salida como mínimo."
                         ReasoningCapability.ALWAYS_ON ->
                             if (behavior.key == "deepseek_r1") {
                                 "Thinking siempre activo. La versión 1.5B es experimental: puede divagar o mezclar idiomas; para chat factual usa Qwen3."
                             } else {
-                                "Este modelo razona siempre. Se recomienda contexto 4096 y al menos 768 tokens de salida."
+                                "Este modelo razona siempre. Se recomienda contexto 4096 y al menos 1024 tokens de salida."
                             }
                         ReasoningCapability.NONE ->
                             "El modelo seleccionado no declara un modo thinking compatible."
@@ -157,7 +168,7 @@ internal fun RuntimeControls(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "Contexto 4096 · salida 768 · temperatura 0.60 · Top P 0.95 · Top K 20",
+                        text = "Contexto 4096 · salida 1024 · temperatura 0.60 · Top P 0.95 · Top K 20 · repetición 1.15",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -249,12 +260,25 @@ internal fun RuntimeControls(
                 label = "Contexto",
                 valueText = settings.contextLength.toString(),
                 description = "Cantidad de conversación que el modelo puede recordar. Más contexto consume más RAM y recarga el modelo.",
-                value = minOf(settings.contextLength, maxContextLimit).toFloat(),
-                valueRange = GenerationSettings.MIN_CONTEXT_LENGTH.toFloat()..maxContextLimit.toFloat(),
-                steps = ((maxContextLimit - GenerationSettings.MIN_CONTEXT_LENGTH) / GenerationSettings.CONTEXT_LENGTH_STEP) - 1,
+                value = settings.contextLength.coerceIn(
+                    GenerationSettings.UI_MIN_CONTEXT_LENGTH,
+                    maxContextLimit,
+                ).toFloat(),
+                valueRange = GenerationSettings.UI_MIN_CONTEXT_LENGTH.toFloat()..maxContextLimit.toFloat(),
+                steps = ((maxContextLimit - GenerationSettings.UI_MIN_CONTEXT_LENGTH) / GenerationSettings.CONTEXT_LENGTH_STEP) - 1,
                 enabled = enabled,
                 onValueChange = { value ->
-                    onSettingsChange(settings.copy(contextLength = snapStep(value, GenerationSettings.CONTEXT_LENGTH_STEP).coerceAtMost(maxContextLimit)))
+                    val contextLength = snapStep(value, GenerationSettings.CONTEXT_LENGTH_STEP)
+                        .coerceIn(GenerationSettings.UI_MIN_CONTEXT_LENGTH, maxContextLimit)
+                    onSettingsChange(
+                        settings.copy(
+                            contextLength = contextLength,
+                            maxTokens = minOf(
+                                settings.maxTokens,
+                                GenerationSettings.maxUiOutputTokensForContext(contextLength),
+                            ),
+                        ),
+                    )
                 },
             )
             SettingSlider(

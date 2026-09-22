@@ -291,8 +291,14 @@ class ServiceSwitchModelTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val targetContext = instrumentation.targetContext
         stageModel(instrumentation, "modelPerf")
+        val stagedModelDir = File(File(targetContext.filesDir, "models"), "modelPerf")
+        val persistedOriginalModelId = targetContext
+            .getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
+            .getString("active_model", null)
 
         val service = bindService(targetContext)
+        val originalSettings = service.service.generationSettings.value
+        val originalModelId = persistedOriginalModelId ?: service.service.currentModel.value
         try {
             assertTrue(service.service.switchModel("modelPerf"))
             service.service.updateGenerationSettings(GenerationSettings(maxTokens = 64, threadCount = 2))
@@ -305,7 +311,12 @@ class ServiceSwitchModelTest {
             assertTrue("expected terminal performance, got $performance", performance.isComplete)
         } finally {
             service.service.cancelGeneration()
+            service.service.updateGenerationSettings(originalSettings)
+            if (originalModelId != null && originalModelId != service.service.currentModel.value) {
+                assertTrue("failed to restore original model $originalModelId", service.service.switchModel(originalModelId))
+            }
             targetContext.unbindService(service.connection)
+            stagedModelDir.deleteRecursively()
         }
     }
 

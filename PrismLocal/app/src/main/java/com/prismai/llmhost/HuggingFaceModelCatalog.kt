@@ -234,6 +234,18 @@ object HuggingFaceModelCatalog {
             notes = "Modelo de razonamiento destilado de DeepSeek-R1; ofrece razonamiento avanzado en un tamaño reducido.",
         ),
         HuggingFaceModelEntry(
+            id = "deepseek_r1_distill_qwen_7b_q4km",
+            name = "DeepSeek-R1-Distill-Qwen 7B",
+            repoId = "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+            fileName = "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+            expectedBytes = 4_683_073_504L,
+            expectedSha256 = "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+            license = "MIT",
+            parameters = "7B",
+            quantization = "Q4_K_M",
+            notes = "DeepSeek-R1 destilado sobre Qwen 7B; razonamiento de mayor calidad para teléfonos con 12 GB de RAM. Su generación es considerablemente más lenta que la variante 1.5B.",
+        ),
+        HuggingFaceModelEntry(
             id = "qwen3_17b_q4km",
             name = "Qwen3 1.7B (Normal + Thinking)",
             repoId = "ggml-org/Qwen3-1.7B-GGUF",

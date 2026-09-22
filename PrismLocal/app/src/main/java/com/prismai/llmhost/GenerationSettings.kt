@@ -65,9 +65,12 @@ data class GenerationSettings(
 
     companion object {
         const val MIN_MAX_TOKENS = 1
-        const val DEFAULT_MAX_TOKENS = 256
-        const val MAX_MAX_TOKENS = 1024
-        const val MAX_TOKEN_STEP = 32
+        const val UI_MIN_MAX_TOKENS = 128
+        const val DEFAULT_MAX_TOKENS = 512
+        const val MAX_MAX_TOKENS = 2048
+        const val MAX_TOKEN_STEP = 64
+        const val UI_MIN_CONTEXT_LENGTH = 1024
+        const val UI_CONTEXT_HEADROOM_TOKENS = 1024
 
         const val MIN_THREAD_COUNT = 1
         const val DEFAULT_THREAD_COUNT = 4
@@ -106,6 +109,18 @@ data class GenerationSettings(
         const val MIN_MAX_AGENT_ITERATIONS = 1
         const val DEFAULT_MAX_AGENT_ITERATIONS = 5
         const val MAX_MAX_AGENT_ITERATIONS = 12
+
+        /**
+         * Largest output cap exposed by the UI while retaining useful room for
+         * the system prompt, current question, summary and recent history.
+         * Internal benchmarks may still use smaller output caps than the UI.
+         */
+        fun maxUiOutputTokensForContext(contextLength: Int): Int {
+            val available = (contextLength - UI_CONTEXT_HEADROOM_TOKENS)
+                .coerceAtLeast(UI_MIN_MAX_TOKENS + MAX_TOKEN_STEP)
+            val snapped = (available / MAX_TOKEN_STEP) * MAX_TOKEN_STEP
+            return snapped.coerceIn(UI_MIN_MAX_TOKENS, MAX_MAX_TOKENS)
+        }
 
         private fun snapToStep(value: Int, step: Int): Int =
             ((value + step / 2) / step) * step

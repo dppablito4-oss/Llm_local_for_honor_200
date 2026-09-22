@@ -31,10 +31,12 @@
 namespace llmhost {
 namespace {
 
-constexpr uint32_t kTokenCapacity = 2048;
+constexpr uint32_t kTokenCapacity = 4096;
 constexpr int kMinGeneratedTokens = 1;
 constexpr int kDefaultGeneratedTokens = 128;
-constexpr int kMaxGeneratedTokens = 1024;
+constexpr int kMaxGeneratedTokens = 2048;
+static_assert(kTokenCapacity > static_cast<uint32_t>(kMaxGeneratedTokens),
+              "stream ring must hold more than one maximum generation");
 constexpr int kMinThreadCount = 1;
 constexpr int kDefaultThreadCount = 4;
 constexpr int kMaxThreadCount = 8;

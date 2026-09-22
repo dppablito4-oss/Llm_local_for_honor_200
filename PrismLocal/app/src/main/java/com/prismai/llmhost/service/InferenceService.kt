@@ -568,7 +568,7 @@ class InferenceService : Service() {
                         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                             .edit()
                             .remove(KEY_ACTIVE_MODEL)
-                            .apply()
+                            .commit()
                     }
                 }
         }
@@ -775,7 +775,13 @@ class InferenceService : Service() {
 
     fun updateGenerationSettings(settings: GenerationSettings) {
         val previous = _generationSettings.value.clamped()
-        val safeSettings = settings.clamped()
+        val clamped = settings.clamped()
+        val safeSettings = clamped.copy(
+            maxTokens = minOf(
+                clamped.maxTokens,
+                GenerationSettings.maxUiOutputTokensForContext(clamped.contextLength),
+            ),
+        )
         _generationSettings.value = safeSettings
         syncCapabilities(safeSettings)
         refreshDeviceAndModelReadiness()

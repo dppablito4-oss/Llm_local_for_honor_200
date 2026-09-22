@@ -49,6 +49,7 @@ data class ModelBehaviorProfile(
             temperature = 0.60f,
             topK = 20,
             topP = 0.95f,
+            repeatPenalty = 1.15f,
         ).clamped()
     }
 
@@ -61,6 +62,7 @@ data class ModelBehaviorProfile(
             temperature = if (enableThinking) 0.60f else settings.temperature,
             topK = if (enableThinking) 20 else settings.topK,
             topP = if (enableThinking) 0.95f else settings.topP,
+            repeatPenalty = if (enableThinking) 1.15f else settings.repeatPenalty,
         ).clamped()
     }
 
@@ -90,7 +92,7 @@ data class ModelBehaviorProfile(
 
     companion object {
         const val RECOMMENDED_REASONING_CONTEXT = 4096
-        const val RECOMMENDED_REASONING_MAX_TOKENS = 768
+        const val RECOMMENDED_REASONING_MAX_TOKENS = 1024
     }
 }
 
@@ -135,6 +137,19 @@ data class ParsedReasoningOutput(
     val hasReasoning: Boolean,
     val reasoningComplete: Boolean,
 )
+
+/** Pure disclosure policy used by Compose and unit tests. */
+object ReasoningDisclosurePolicy {
+    fun isExpanded(
+        userOverride: Boolean?,
+        parsed: ParsedReasoningOutput?,
+        showLoading: Boolean,
+    ): Boolean = userOverride ?: (
+        parsed?.hasReasoning == true &&
+            !parsed.reasoningComplete &&
+            showLoading
+        )
+}
 
 object ReasoningOutputParser {
     private const val OPEN = "<think>"

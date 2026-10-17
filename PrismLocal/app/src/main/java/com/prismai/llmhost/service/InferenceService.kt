@@ -855,14 +855,28 @@ class InferenceService : Service() {
     ): String {
         chatRepositoryReady.await()
         val trimmed = prompt.trim()
-        val isImageCmd = trimmed.startsWith("/image ", ignoreCase = true) ||
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trim()
+        val isExactImageCmd = trimmed.equals("/image", ignoreCase = true) ||
+                              trimmed.equals("/imagine", ignoreCase = true) ||
+                              trimmed.equals("/sd", ignoreCase = true)
+        val isImageCmd = isExactImageCmd ||
+                         trimmed.startsWith("/image ", ignoreCase = true) ||
                          trimmed.startsWith("/imagine ", ignoreCase = true) ||
                          trimmed.startsWith("/sd ", ignoreCase = true)
         if (isImageCmd) {
             val imgPrompt = when {
+                isExactImageCmd -> ""
                 trimmed.startsWith("/image ", ignoreCase = true) -> trimmed.removePrefix("/image ").trim()
                 trimmed.startsWith("/imagine ", ignoreCase = true) -> trimmed.removePrefix("/imagine ").trim()
                 else -> trimmed.removePrefix("/sd ").trim()
+            }
+            if (imgPrompt.isBlank()) {
+                val hint = "🎨 Para generar una imagen con Stable Diffusion, incluye una descripción después de `/image`.\n\n*Ejemplo:* `/image un gatito astronauta flotando en el espacio exterior, hiperrealista, 8k`"
+                appendTranscriptMessage(TranscriptRole.USER, prompt)
+                appendTranscriptMessage(TranscriptRole.ASSISTANT, hint)
+                return hint
             }
             return generateImageDirect(imgPrompt)
         }
@@ -1610,6 +1624,16 @@ class InferenceService : Service() {
         if (::voiceIoManager.isInitialized) voiceIoManager.shutdown()
         if (::diffusionManager.isInitialized) diffusionManager.unload()
         super.onDestroy()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val prompt = intent?.getStringExtra("prompt")
+        if (!prompt.isNullOrBlank()) {
+            serviceScope.launch {
+                generateSafelyAndAwait(prompt)
+            }
+        }
+        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

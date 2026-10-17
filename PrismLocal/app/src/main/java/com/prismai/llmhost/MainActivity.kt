@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handlePromptIntent(intent)
         setContent {
             ChatScreen(
                 service = service,
@@ -99,6 +100,25 @@ class MainActivity : ComponentActivity() {
             )
         }
         requestNotificationPermissionIfNeeded()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handlePromptIntent(intent)
+    }
+
+    private fun handlePromptIntent(intent: Intent?) {
+        val prompt = intent?.getStringExtra("prompt")
+        Log.i(TAG, "handlePromptIntent received prompt=$prompt")
+        if (prompt.isNullOrBlank()) return
+        lifecycleScope.launch(Dispatchers.Default) {
+            while (service == null) {
+                kotlinx.coroutines.delay(100)
+            }
+            Log.i(TAG, "Invoking generateSafelyAndAwait with: $prompt")
+            val res = service?.generateSafelyAndAwait(prompt)
+            Log.i(TAG, "generateSafelyAndAwait result: $res")
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {

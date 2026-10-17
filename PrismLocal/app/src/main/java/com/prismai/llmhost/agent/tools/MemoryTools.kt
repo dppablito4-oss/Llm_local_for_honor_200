@@ -12,7 +12,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 class MemoryTools(
-    private val memoryStore: SqlMemoryStore,
+    private val memoryStore: MemoryStore,
     private val currentChatId: () -> String?,
     private val refreshMemoriesList: () -> Unit,
 ) {
@@ -23,7 +23,7 @@ class MemoryTools(
         val category = runCatching {
             MemoryCategory.valueOf(call.arguments.optString("category", "GENERAL").uppercase())
         }.getOrDefault(MemoryCategory.GENERAL)
-        val existing = memoryStore.queryRelevant(factText, limit = 3)
+        val existing = memoryStore.queryRelevantForChat(factText, currentChatId(), limit = 3)
         if (existing.isNotEmpty() && existing.first().score > 0.75f) {
             val updated = memoryStore.update(existing.first().fact.id, factText, existing.first().fact.confidence)
             if (updated) refreshMemoriesList()
@@ -45,7 +45,7 @@ class MemoryTools(
         val query = call.arguments.optString("query").trim().take(200)
         if (query.isBlank()) return toolFailure(call, AgentToolErrorCode.INVALID_ARGUMENT, "Query is required")
         val maxResults = call.arguments.optInt("max_results", 5).coerceIn(1, 10)
-        val matches = memoryStore.queryRelevant(query, limit = maxResults)
+        val matches = memoryStore.queryRelevantForChat(query, currentChatId(), limit = maxResults)
         val resultsArray = JSONArray()
         matches.forEach { match ->
             resultsArray.put(JSONObject()
@@ -73,7 +73,7 @@ class MemoryTools(
     fun listMemories(call: AgentToolCall): AgentToolResult {
         val categoryFilter = call.arguments.optString("category", "all").lowercase()
         val limit = call.arguments.optInt("limit", 30).coerceIn(5, 100)
-        val allActive = memoryStore.getAllActive()
+        val allActive = memoryStore.getActiveForChat(currentChatId())
         val filtered = if (categoryFilter == "all") {
             allActive
         } else {

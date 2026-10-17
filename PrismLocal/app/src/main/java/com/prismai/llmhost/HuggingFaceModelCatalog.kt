@@ -164,6 +164,17 @@ object HuggingFaceModelCatalog {
             notes = "Phi-3 Mini de Microsoft; buen razonamiento para su tamaño y licencia MIT.",
         ),
         HuggingFaceModelEntry(
+            id = "phi35_mini_38b_q4km",
+            name = "Phi-3.5-mini 3.8B Instruct",
+            repoId = "bartowski/Phi-3.5-mini-instruct-GGUF",
+            fileName = "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+            expectedBytes = 2_449L * 1024L * 1024L,
+            license = "MIT",
+            parameters = "3.8B",
+            quantization = "Q4_K_M",
+            notes = "Phi-3.5 Mini de Microsoft; soporte hasta 128k de contexto, fuerte en razonamiento multi-turno y matemáticas bajo licencia MIT.",
+        ),
+        HuggingFaceModelEntry(
             id = "phi4_mini_38b_q4km",
             name = "Phi-4-mini 3.8B Instruct",
             repoId = "bartowski/Phi-4-mini-instruct-GGUF",

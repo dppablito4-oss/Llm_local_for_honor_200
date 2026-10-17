@@ -119,6 +119,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -433,9 +434,10 @@ fun ChatScreen(
                             onOpenChats = { chatsVisible = true },
                             onOpenControls = { controlsVisible = true },
                             onSwitchModel = onSwitchModel,
+                            onNewChat = { service?.createChat() },
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         val activeAssistantMessageId by remember(transcript.size, isGenerating) {
                             derivedStateOf {
@@ -453,25 +455,36 @@ fun ChatScreen(
                                 .weight(1f)
                                 .fillMaxWidth(),
                             state = listState,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             if (transcript.isEmpty()) {
-                                item(key = "model-onboarding") {
-                                    ModelOnboardingCard(
-                                        currentModel = currentModel,
-                                        installedModelCount = models.size,
-                                        recommendedModel = hfCatalog.firstOrNull(),
-                                        downloadState = modelDownloadState,
-                                        enabled = modelActionsEnabled,
-                                        onImportModel = {
-                                            onImportPickerStarted()
-                                            importLauncher.launch(arrayOf("*/*"))
-                                        },
-                                        onDownloadRecommended = { entry ->
-                                            service?.downloadHuggingFaceModel(entry.id)
-                                        },
-                                        onOpenControls = { controlsVisible = true },
-                                    )
+                                if (currentModel != null) {
+                                    item(key = "empty-chat-greeting") {
+                                        EmptyChatGreeting(
+                                            modelName = currentModel,
+                                            onSuggestionClick = { suggestion ->
+                                                prompt = suggestion
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    item(key = "model-onboarding") {
+                                        ModelOnboardingCard(
+                                            currentModel = currentModel,
+                                            installedModelCount = models.size,
+                                            recommendedModel = hfCatalog.firstOrNull(),
+                                            downloadState = modelDownloadState,
+                                            enabled = modelActionsEnabled,
+                                            onImportModel = {
+                                                onImportPickerStarted()
+                                                importLauncher.launch(arrayOf("*/*"))
+                                            },
+                                            onDownloadRecommended = { entry ->
+                                                service?.downloadHuggingFaceModel(entry.id)
+                                            },
+                                            onOpenControls = { controlsVisible = true },
+                                        )
+                                    }
                                 }
                             } else {
                                 items(transcript, key = { it.id }) { message ->
@@ -755,9 +768,109 @@ fun ChatScreen(
     }
 }
 
+@Composable
+private fun EmptyChatGreeting(
+    modelName: String?,
+    onSuggestionClick: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Spacer(modifier = Modifier.height(16.dp))
 
+        // Sparkling Prism gem icon
+        Surface(
+            modifier = Modifier.size(52.dp),
+            shape = RoundedCornerShape(26.dp),
+            color = Color(0xFF161619),
+            border = BorderStroke(1.dp, Color(0xFF2B2B30)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Canvas(modifier = Modifier.size(24.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val path = Path().apply {
+                        moveTo(w * 0.5f, 0f)
+                        quadraticTo(w * 0.5f, h * 0.5f, w, h * 0.5f)
+                        quadraticTo(w * 0.5f, h * 0.5f, w * 0.5f, h)
+                        quadraticTo(w * 0.5f, h * 0.5f, 0f, h * 0.5f)
+                        quadraticTo(w * 0.5f, h * 0.5f, w * 0.5f, 0f)
+                        close()
+                    }
+                    drawPath(
+                        path = path,
+                        brush = Brush.linearGradient(listOf(PrismCyan, PrismViolet)),
+                    )
+                }
+            }
+        }
 
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "¿En qué puedo ayudarte?",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "${modelName?.let(::polishedModelName) ?: "Modelo local"} · 100% privado",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Suggestion prompt chips (ChatGPT / Gemini style)
+        val suggestions = listOf(
+            "💡 Explica un concepto complejo paso a paso",
+            "⚡ Escribe código en Kotlin para Android",
+            "📝 Resume las ideas clave de un texto",
+            "✍️ Redacta un correo profesional y claro",
+        )
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            suggestions.forEach { item ->
+                val emoji = item.take(2)
+                val text = item.substring(2).trim()
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF161619),
+                    border = BorderStroke(1.dp, Color(0xFF26262B)),
+                    onClick = { onSuggestionClick(text) },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(text = emoji, fontSize = 16.sp)
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun ModelOnboardingCard(

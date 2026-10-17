@@ -56,3 +56,24 @@ data class MigrationStateEntity(
     val sourceChatCount: Int,
     val sourceMessageCount: Int,
 )
+
+@Entity(
+    tableName = "memories",
+    primaryKeys = ["id"],
+    indices = [
+        Index(value = ["scope", "sourceChatId"]),
+        Index(value = ["lastAccessedAt"]),
+    ],
+)
+data class MemoryEntity(
+    val id: String,
+    val fact: String,
+    val category: String,
+    val confidence: Float,
+    val sourceChatId: String? = null,
+    val scope: String,
+    val createdAt: Long,
+    val lastAccessedAt: Long,
+    val accessCount: Int = 0,
+    val decayed: Boolean = false,
+)

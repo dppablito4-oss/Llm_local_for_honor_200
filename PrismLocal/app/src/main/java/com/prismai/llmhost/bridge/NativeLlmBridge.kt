@@ -34,7 +34,11 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
         private val bridgeInstanceCounter = AtomicInteger(0)
 
         init {
-            System.loadLibrary("llmhost")
+            try {
+                System.loadLibrary("llmhost")
+            } catch (e: UnsatisfiedLinkError) {
+                // Allows loading class metadata in host-side JVM unit tests where libllmhost.so is not present.
+            }
         }
 
         fun create(debugHooksEnabled: Boolean = BuildConfig.LLMHOST_DEBUG_HOOKS): NativeLlmBridge {

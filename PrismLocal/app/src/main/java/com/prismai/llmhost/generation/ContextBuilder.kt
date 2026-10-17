@@ -118,7 +118,7 @@ object ContextBuilder {
             .filter {
                 it.id != activeAssistantTranscriptId &&
                     it.text.isNotBlank() &&
-                    (summaryUntilMessageId == null || it.id > summaryUntilMessageId)
+                    (summaryContext.isBlank() || summaryUntilMessageId == null || it.id > summaryUntilMessageId)
             }
             .mapNotNull { it.toChatMessageOrNull() }
             .toList()

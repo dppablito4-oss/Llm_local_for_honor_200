@@ -241,7 +241,7 @@ class InferenceService : Service() {
     private val _pendingAgentToolAction get() = uiState._pendingAgentToolAction
 
     // Event bus — SharedFlow write sites (only 3 call sites) switched to eventBus methods
-    private lateinit var memoryStore: SqlMemoryStore
+    private lateinit var memoryStore: MemoryStore
     // Phase 2 — RAG
     private lateinit var vectorStore: VectorStore
     private lateinit var ragManager: RagManager
@@ -327,7 +327,12 @@ class InferenceService : Service() {
             deviceProfiler, modelReadinessAssessor,
             onRefreshReadiness = { refreshDeviceAndModelReadiness() },
         )
-        memoryStore = SqlMemoryStore(this)
+        val prismDb = com.prismai.llmhost.persistence.PrismDatabase.getInstance(this)
+        memoryStore = com.prismai.llmhost.storage.RoomMemoryStore(prismDb.memoryDao())
+        serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.prismai.llmhost.persistence.LegacyMemoryImporter(prismDb).importIfNeeded(this@InferenceService)
+            refreshMemoriesList()
+        }
         refreshMemoriesList()
         // Phase 2 — RAG vector store + manager
         vectorStore = VectorStore(this)

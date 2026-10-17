@@ -45,6 +45,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import com.prismai.llmhost.GenerationPerformance
@@ -91,57 +92,73 @@ internal fun PromptComposer(
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
-        color = Color(0xFF171719),
+        shape = RoundedCornerShape(26.dp),
+        color = Color(0xFF18181B),
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, prismGlassBorderColor()),
+        border = BorderStroke(1.dp, Color(0xFF2B2B30)),
         shadowElevation = 0.dp,
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                ComposerIconButton(action = ComposerAction.Add, enabled = enabled && !isGenerating, onClick = onAddAttachment)
+                ComposerIconButton(
+                    action = ComposerAction.Add,
+                    enabled = enabled && !isGenerating,
+                    onClick = onAddAttachment,
+                )
                 ComposerTextInput(
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 44.dp, max = 132.dp),
+                        .heightIn(min = 36.dp, max = 120.dp),
                     value = prompt,
                     onValueChange = onPromptChange,
                     placeholder = placeholder,
                     enabled = enabled,
                 )
-                if (!isGenerating && onVoiceClick != null && voiceState?.sttAvailable == true) {
-                    ComposerIconButton(
-                        action = ComposerAction.Voice,
-                        enabled = enabled,
-                        onClick = onVoiceClick,
-                    )
-                }
-                if (isGenerating) {
-                    ComposerIconButton(
-                        action = ComposerAction.Stop,
-                        enabled = enabled,
-                        onClick = onCancel,
-                    )
-                } else {
-                    val hasPrompt = prompt.isNotBlank()
-                    val hasAttachments = attachments.isNotEmpty()
-                    ComposerIconButton(
-                        action = if (!hasPrompt && canContinue) ComposerAction.More else ComposerAction.Send,
-                        enabled = enabled && (hasPrompt || hasAttachments || canContinue),
-                        onClick = {
-                            if (hasPrompt || hasAttachments) {
-                                onSend()
-                            } else {
-                                onContinue()
-                            }
-                        },
-                    )
+                val hasPrompt = prompt.isNotBlank()
+                val hasAttachments = attachments.isNotEmpty()
+                when {
+                    isGenerating -> {
+                        ComposerIconButton(
+                            action = ComposerAction.Stop,
+                            enabled = enabled,
+                            onClick = onCancel,
+                        )
+                    }
+                    hasPrompt || hasAttachments -> {
+                        ComposerIconButton(
+                            action = ComposerAction.Send,
+                            enabled = enabled,
+                            onClick = onSend,
+                        )
+                    }
+                    onVoiceClick != null && voiceState?.sttAvailable == true -> {
+                        ComposerIconButton(
+                            action = ComposerAction.Voice,
+                            enabled = enabled,
+                            onClick = onVoiceClick,
+                        )
+                    }
+                    canContinue -> {
+                        ComposerIconButton(
+                            action = ComposerAction.More,
+                            enabled = enabled,
+                            onClick = onContinue,
+                        )
+                    }
+                    else -> {
+                        ComposerIconButton(
+                            action = ComposerAction.Send,
+                            enabled = false,
+                            onClick = {},
+                        )
+                    }
                 }
             }
             AttachmentTray(
@@ -150,23 +167,30 @@ internal fun PromptComposer(
             )
             if (!imeVisible) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Canvas(modifier = Modifier.size(6.dp)) { drawCircle(color = PrismGreen) }
-                    Text(
-                        text = buildString {
-                            append("Private on-device")
-                            performance?.takeIf { it.tokensPerSecond > 0.0 }?.let {
-                                append("  ·  ${formatTokensPerSecond(it.tokensPerSecond)} t/s")
-                            }
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Canvas(modifier = Modifier.size(5.dp)) { drawCircle(color = PrismGreen) }
+                        Text(
+                            text = "Local · Privado",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    }
+                    performance?.takeIf { it.tokensPerSecond > 0.0 }?.let {
+                        Text(
+                            text = "${formatTokensPerSecond(it.tokensPerSecond)} t/s",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                    }
                 }
             }
         }
@@ -247,7 +271,7 @@ private fun ComposerTextInput(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(18.dp),
         color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
         border = null,
@@ -260,20 +284,24 @@ private fun ComposerTextInput(
             enabled = enabled,
             maxLines = 4,
             textStyle = MaterialTheme.typography.bodyMedium.merge(
-                TextStyle(color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                TextStyle(
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                )
             ),
             decorationBox = { innerTextField ->
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
                     contentAlignment = Alignment.CenterStart,
                 ) {
                     if (value.isEmpty()) {
                         Text(
                             text = placeholder,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
@@ -302,24 +330,22 @@ private fun ComposerIconButton(
     onClick: () -> Unit,
 ) {
     val view = LocalView.current
-    val isPrimary = action == ComposerAction.Send || action == ComposerAction.Stop || action == ComposerAction.More
-    val buttonColor = when {
-        !enabled -> Color(0xFF2A2A2E)
-        action == ComposerAction.Stop -> Color(0xFFE0525E)
-        isPrimary -> Color.White
-        else -> Color.Transparent
+    val buttonColor = when (action) {
+        ComposerAction.Send -> if (enabled) Color.White else Color(0xFF262629)
+        ComposerAction.Stop -> Color(0xFFEF4444)
+        ComposerAction.Add -> Color(0xFF26262A)
+        ComposerAction.Voice -> Color.Transparent
+        ComposerAction.More -> Color(0xFF26262A)
     }
     Surface(
         modifier = Modifier
-            .size(44.dp)
+            .size(36.dp)
             .semantics {
                 contentDescription = action.contentDescription
                 role = Role.Button
             },
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(18.dp),
         color = buttonColor,
-        contentColor = if (isPrimary && action != ComposerAction.Stop) Color.Black else MaterialTheme.colorScheme.onSurface,
-        border = if (isPrimary) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 0.dp,
         enabled = enabled,
         onClick = {
@@ -327,8 +353,8 @@ private fun ComposerIconButton(
             onClick()
         },
     ) {
-        Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.Center) {
-            ComposerActionGlyph(action = action, enabled = enabled, primary = isPrimary)
+        Box(modifier = Modifier.padding(6.dp), contentAlignment = Alignment.Center) {
+            ComposerActionGlyph(action = action, enabled = enabled)
         }
     }
 }
@@ -337,16 +363,16 @@ private fun ComposerIconButton(
 private fun ComposerActionGlyph(
     action: ComposerAction,
     enabled: Boolean,
-    primary: Boolean,
 ) {
-    val color = when {
-        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-        action == ComposerAction.Stop -> Color.White
-        primary -> Color.Black
-        else -> MaterialTheme.colorScheme.onSurface
+    val color = when (action) {
+        ComposerAction.Send -> if (enabled) Color.Black else Color(0xFF6B6B72)
+        ComposerAction.Stop -> Color.White
+        ComposerAction.Add -> MaterialTheme.colorScheme.onSurface
+        ComposerAction.Voice -> if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        ComposerAction.More -> MaterialTheme.colorScheme.onSurface
     }
-    Canvas(modifier = Modifier.size(24.dp)) {
-        val strokeWidth = 2.8f
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val strokeWidth = 2.2f
         when (action) {
             ComposerAction.Add -> {
                 drawLine(
@@ -365,32 +391,25 @@ private fun ComposerActionGlyph(
                 )
             }
             ComposerAction.Send -> {
-                val path = Path().apply {
-                    moveTo(size.width * 0.16f, size.height * 0.84f)
-                    lineTo(size.width * 0.86f, size.height * 0.14f)
-                    lineTo(size.width * 0.62f, size.height * 0.86f)
-                    lineTo(size.width * 0.48f, size.height * 0.52f)
-                    close()
-                }
-                drawPath(path = path, color = color.copy(alpha = 0.18f))
+                // Modern Upward Arrow (↑) like ChatGPT / Gemini
                 drawLine(
                     color = color,
-                    start = Offset(size.width * 0.16f, size.height * 0.84f),
-                    end = Offset(size.width * 0.86f, size.height * 0.14f),
+                    start = Offset(center.x, size.height * 0.76f),
+                    end = Offset(center.x, size.height * 0.24f),
                     strokeWidth = strokeWidth,
                     cap = StrokeCap.Round,
                 )
                 drawLine(
                     color = color,
-                    start = Offset(size.width * 0.86f, size.height * 0.14f),
-                    end = Offset(size.width * 0.62f, size.height * 0.86f),
+                    start = Offset(center.x, size.height * 0.24f),
+                    end = Offset(size.width * 0.28f, size.height * 0.46f),
                     strokeWidth = strokeWidth,
                     cap = StrokeCap.Round,
                 )
                 drawLine(
                     color = color,
-                    start = Offset(size.width * 0.48f, size.height * 0.52f),
-                    end = Offset(size.width * 0.62f, size.height * 0.86f),
+                    start = Offset(center.x, size.height * 0.24f),
+                    end = Offset(size.width * 0.72f, size.height * 0.46f),
                     strokeWidth = strokeWidth,
                     cap = StrokeCap.Round,
                 )
@@ -428,6 +447,13 @@ private fun ComposerActionGlyph(
                     topLeft = Offset(size.width * 0.22f, size.height * 0.32f),
                     size = Size(size.width * 0.56f, size.height * 0.42f),
                     style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                )
+                drawLine(
+                    color = color,
+                    start = Offset(center.x, size.height * 0.74f),
+                    end = Offset(center.x, size.height * 0.88f),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
                 )
             }
         }

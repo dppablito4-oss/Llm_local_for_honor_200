@@ -50,8 +50,8 @@ class PromptBuilder(
 
     // ── Memory context ──────────────────────────────────────────────────
 
-    fun buildMemoryContext(userPrompt: String): String {
-        val memories = runCatching { memoryStore.getAllActive() }.getOrDefault(emptyList())
+    fun buildMemoryContext(userPrompt: String, chatId: String? = null): String {
+        val memories = runCatching { memoryStore.getActiveForChat(chatId) }.getOrDefault(emptyList())
         return MemoryRetriever.buildMemoryContext(userPrompt, memories)
     }
 

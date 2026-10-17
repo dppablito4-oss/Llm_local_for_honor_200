@@ -11,15 +11,13 @@ en el Honor 200 hacia chat persistente, contexto largo controlado, memoria
 aislada y RAG documental, conservando las optimizaciones de inferencia que
 ya funcionan.
 
-> **Corrección de auditoría (19 de septiembre de 2026):** el proyecto ya fue
-> clonado, compilado, instalado y probado con modelos reales. Room es ahora la
-> fuente de verdad de chats y mensajes; JSON se regenera solo como respaldo.
-> También se completó `ContextBuilder`, incluido el conteo con el tokenizer del
-> GGUF activo. Memoria de largo plazo y vectores siguen en bases SQLite separadas.
-> RAG puede almacenar y consultar fragmentos, pero aún no se inyecta en el chat
-> normal. El estado y destino detallados están en
-> `PrismLocal/docs/architecture/current-state.md` y
-> `PrismLocal/docs/architecture/target-state.md`.
+> **Corrección de auditoría (Octubre de 2026):** el proyecto ya fue
+> compilado, instalado y probado con modelos reales en el Honor 200. Room es la
+> fuente de verdad de chats y mensajes. Se completó `ContextBuilder` con conteo
+> nativo vía `llama_tokenize`. La Fase 3 (Resumen Acumulativo de conversaciones largas)
+> y la Fase 4 (Aislamiento Estricto de Memoria en Room con scope GLOBAL vs CHAT y
+> migrador automático desde SQLite) están implementadas y validadas con tests unitarios.
+> El estado y destino detallados están en `PLAN.md` y `PrismLocal/docs/architecture/current-state.md`.
 
 ------------------------------------------------------------------------
 

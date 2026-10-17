@@ -178,8 +178,12 @@ class GenerationOrchestrator(
             agentToolRouter.activeAgentToolHistory.clear()
         }
 
-        val memoryContext = if (benchmarkPreset == null) promptBuilder.buildMemoryContext(prompt) else ""
         val activeChat = chatManager.currentSession()
+        val memoryContext = if (benchmarkPreset == null) {
+            promptBuilder.buildMemoryContext(prompt, activeChat?.id)
+        } else {
+            ""
+        }
         val rollingSummaryContext = activeChat?.summary
             ?.takeIf { it.isNotBlank() }
             ?.let { "[Resumen acumulado de mensajes anteriores]\n$it" }

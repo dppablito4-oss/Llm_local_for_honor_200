@@ -15,12 +15,18 @@ import java.util.UUID
  * A single durable fact extracted from a conversation.
  * Memories decay over time if not accessed; similar memories are merged.
  */
+enum class MemoryScope {
+    GLOBAL,
+    CHAT,
+}
+
 data class MemoryFact(
     val id: String = UUID.randomUUID().toString().take(8),
     val fact: String,
     val category: MemoryCategory = MemoryCategory.GENERAL,
     val confidence: Float = 0.5f,
     val sourceChatId: String? = null,
+    val scope: MemoryScope = if (sourceChatId.isNullOrBlank()) MemoryScope.GLOBAL else MemoryScope.CHAT,
     val createdAt: Long = System.currentTimeMillis(),
     val lastAccessedAt: Long = System.currentTimeMillis(),
     val accessCount: Int = 0,
@@ -73,8 +79,22 @@ interface MemoryStore {
     /** Return all non-decayed facts, most-recently-accessed first. */
     fun getAllActive(): List<MemoryFact>
 
+    /** Return active facts accessible to a specific chat (global + chat-scoped). */
+    fun getActiveForChat(chatId: String?): List<MemoryFact> =
+        getAllActive().filter { fact ->
+            fact.scope == MemoryScope.GLOBAL || (chatId != null && fact.sourceChatId == chatId)
+        }
+
     /** Return facts relevant to query, ranked by keyword-overlap score. Max `limit` results. */
     fun queryRelevant(query: String, limit: Int = 5): List<MemoryMatch>
+
+    /** Return facts relevant to query within chat scope. Max `limit` results. */
+    fun queryRelevantForChat(query: String, chatId: String?, limit: Int = 5): List<MemoryMatch> =
+        getActiveForChat(chatId)
+            .map { MemoryMatch(it, MemoryRetriever.score(query, it.fact)) }
+            .filter { it.score > 0f }
+            .sortedByDescending { it.score }
+            .take(limit)
 
     /** Mark facts older than `olderThanMillis` as decayed if not accessed since. */
     fun decayOldMemories(olderThanMillis: Long): Int

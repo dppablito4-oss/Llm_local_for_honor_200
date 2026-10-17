@@ -25,19 +25,19 @@ Basado en la infraestructura de [PrismLocal](https://github.com/gthgomez/PrismLo
 ### 1. Motor de Inferencia Nativo C++20 (`llama.cpp` + ARM NEON)
 * **Compilación Nativa `-O3` Forzada (`LLMHOST_OPTIMIZE_NATIVE`):** Evita la degradación a `-O0` que Android Studio aplica en variantes Debug, garantizando un rendimiento óptimo constante (~4x a 5x superior).
 * **Inferencia Estable en CPU:** Vulkan desactivado por defecto (`LLMHOST_ENABLE_VULKAN = false`) para sortear los fallos de `vkCmdBindPipeline` reportados en los drivers stock del Adreno 720. Los 4 núcleos Cortex-A715 ofrecen latencia estable, cero cuelgues y bajo estrés térmico.
-* **Tokenizer Nativo en C++ (`llama_tokenize`):** Integración directa en [`Engine::countChatTokens`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/cpp/Engine.cpp) y [`NativeLlmBridge`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/java/com/prismai/llmhost/bridge/NativeLlmBridge.kt). Permite calcular con exactitud matemática los tokens del chat con la plantilla del modelo activo antes de generar, eliminando desbordamientos de ventana.
+* **Tokenizer Nativo en C++ (`llama_tokenize`):** Integración directa en [`Engine::countChatTokens`](PrismLocal/app/src/main/cpp/Engine.cpp) y [`NativeLlmBridge`](PrismLocal/app/src/main/java/com/prismai/llmhost/bridge/NativeLlmBridge.kt). Permite calcular con exactitud matemática los tokens del chat con la plantilla del modelo activo antes de generar, eliminando desbordamientos de ventana.
 
 ### 2. Soporte para Modelos con Razonamiento (*Thinking Models*)
-* **Perfiles Dinámicos de Comportamiento ([`ReasoningModels.kt`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/java/com/prismai/llmhost/model/ReasoningModels.kt)):** Soporte para **Qwen3** (conmutación fluida entre `/think` y `/no_think`) y **DeepSeek-R1 Distill** (omisión del system prompt y configuración de temperatura/top-k recomendada por el autor).
+* **Perfiles Dinámicos de Comportamiento ([`ReasoningModels.kt`](PrismLocal/app/src/main/java/com/prismai/llmhost/model/ReasoningModels.kt)):** Soporte para **Qwen3** (conmutación fluida entre `/think` y `/no_think`) y **DeepSeek-R1 Distill** (omisión del system prompt y configuración de temperatura/top-k recomendada por el autor).
 * **Interfaz de Razonamiento Colapsable:** Visualización en tiempo real del bloque `<think>` en un acordeón expandible en Jetpack Compose, con telemetría de tokens generados en la fase de razonamiento.
 * **Purga Automática de CoT en Historial:** El razonamiento intermedio se muestra al usuario pero se purga al almacenar y reinyectar el contexto en turnos siguientes, impidiendo la saturación prematura de la ventana de contexto.
 
 ### 3. Persistencia Relacional en Room SQLite
-* **Base de Datos Transaccional ([`PrismDatabase.kt`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/java/com/prismai/llmhost/persistence/PrismDatabase.kt)):** Almacenamiento primario en Room con entidades `ChatEntity` y `MessageEntity`, claves foráneas con borrado en cascada e índices optimizados.
-* **Migración No Destructiva ([`LegacyConversationImporter.kt`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/java/com/prismai/llmhost/persistence/LegacyConversationImporter.kt)):** Importación verificada de archivos JSON legados con respaldo no bloqueante en segundo plano (`writeChatIndexJson`).
+* **Base de Datos Transaccional ([`PrismDatabase.kt`](PrismLocal/app/src/main/java/com/prismai/llmhost/persistence/PrismDatabase.kt)):** Almacenamiento primario en Room con entidades `ChatEntity` y `MessageEntity`, claves foráneas con borrado en cascada e índices optimizados.
+* **Migración No Destructiva ([`LegacyConversationImporter.kt`](PrismLocal/app/src/main/java/com/prismai/llmhost/persistence/LegacyConversationImporter.kt)):** Importación verificada de archivos JSON legados con respaldo no bloqueante en segundo plano (`writeChatIndexJson`).
 
 ### 4. Orquestación y Constructor de Contexto Modular
-* **[`ContextBuilder.kt`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/main/java/com/prismai/llmhost/generation/ContextBuilder.kt):** Genera un `PreparedContext` completamente observable. Asigna topes independientes para Sistema, Memoria (máx. 384 tokens), RAG (máx. 1024 tokens), Resumen e Historial Reciente, garantizando que un documento o memoria grande nunca desplace la conversación activa.
+* **[`ContextBuilder.kt`](PrismLocal/app/src/main/java/com/prismai/llmhost/generation/ContextBuilder.kt):** Genera un `PreparedContext` completamente observable. Asigna topes independientes para Sistema, Memoria (máx. 384 tokens), RAG (máx. 1024 tokens), Resumen e Historial Reciente, garantizando que un documento o memoria grande nunca desplace la conversación activa.
 
 ### 5. Interfaz de Usuario AMOLED True Black
 * Tema visual diseñado en negro absoluto (`#000000`) que maximiza la eficiencia energética apagando los píxeles del panel OLED del Honor 200.
@@ -124,7 +124,7 @@ cd Llm_local_for_honor_200/PrismLocal
 
 ## 🧪 Pruebas y Validación de Calidad
 
-* **Pruebas Unitarias:** 100% aprobadas en Gradle 9.4.1 ([`PromptBuilderMessagesTest`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/test/java/com/prismai/llmhost/PromptBuilderMessagesTest.kt), [`ReasoningModelsTest`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/test/java/com/prismai/llmhost/model/ReasoningModelsTest.kt), [`EngineConfigStoreTest`](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/app/src/test/java/com/prismai/llmhost/engine/EngineConfigStoreTest.kt)).
+* **Pruebas Unitarias:** 100% aprobadas en Gradle 9.4.1 ([`PromptBuilderMessagesTest`](PrismLocal/app/src/test/java/com/prismai/llmhost/PromptBuilderMessagesTest.kt), [`ReasoningModelsTest`](PrismLocal/app/src/test/java/com/prismai/llmhost/model/ReasoningModelsTest.kt), [`EngineConfigStoreTest`](PrismLocal/app/src/test/java/com/prismai/llmhost/engine/EngineConfigStoreTest.kt)).
 * **Pruebas Conectadas en Honor 200:**
   * `RealInferenceSmokeTest`: Verificación de inferencia real y conteo nativo de tokens (`activeTokenizerCountsTemplatedChatBeforeGeneration`).
   * `ServiceSwitchModelTest`: Cambio de modelo en caliente conservando el historial sin pérdida de datos.
@@ -135,9 +135,10 @@ cd Llm_local_for_honor_200/PrismLocal
 
 ## 📚 Documentación Técnica Adicional
 
-* [Plan General de Adopción y Optimización (`PRISMLOCAL_HONOR200_PLAN.md`)](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PRISMLOCAL_HONOR200_PLAN.md)
-* [Estado Arquitectónico Actual (`PrismLocal/docs/architecture/current-state.md`)](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/docs/architecture/current-state.md)
-* [Arquitectura Objetivo Incremental (`PrismLocal/docs/architecture/target-state.md`)](file:///c:/Users/Grafiplot/.gemini/antigravity-ide/scratch/Llm_local_for_honor_200/PrismLocal/docs/architecture/target-state.md)
+* [Plan General de Adopción y Optimización (`PRISMLOCAL_HONOR200_PLAN.md`)](PRISMLOCAL_HONOR200_PLAN.md)
+* [Plan Secuencial de Desarrollo (`PLAN.md`)](PLAN.md)
+* [Estado Arquitectónico Actual (`PrismLocal/docs/architecture/current-state.md`)](PrismLocal/docs/architecture/current-state.md)
+* [Arquitectura Objetivo Incremental (`PrismLocal/docs/architecture/target-state.md`)](PrismLocal/docs/architecture/target-state.md)
 
 ---
 

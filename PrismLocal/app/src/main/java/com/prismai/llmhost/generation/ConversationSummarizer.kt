@@ -50,8 +50,14 @@ class ConversationSummarizer(
         baseSettings: GenerationSettings,
     ): SummaryResult {
         val behavior = ModelBehaviorProfiles.resolve(modelId)
+        val rawPrompt = buildPrompt(plan)
+        val fullPrompt = if (behavior.omitSystemPrompt) {
+            "$SYSTEM_PROMPT\n\n$rawPrompt"
+        } else {
+            rawPrompt
+        }
         val request = behavior.prepareUserPrompt(
-            prompt = buildPrompt(plan),
+            prompt = fullPrompt,
             mode = ReasoningMode.NORMAL,
             agentEnabled = false,
         )
@@ -115,39 +121,39 @@ class ConversationSummarizer(
             transcript: List<TranscriptMessage>,
             preparedContext: PreparedContext,
         ): SummaryPlan? {
-        if (!shouldSummarize(preparedContext)) return null
+            if (!shouldSummarize(preparedContext)) return null
 
-        val unsummarized = transcript.filter { message ->
-            message.text.isNotBlank() &&
-                (session.summaryUntilMessageId == null || message.id > session.summaryUntilMessageId)
-        }
-        if (unsummarized.size <= RECENT_MESSAGES_TO_KEEP + 1) return null
+            val unsummarized = transcript.filter { message ->
+                message.text.isNotBlank() &&
+                    (session.summaryUntilMessageId == null || message.id > session.summaryUntilMessageId)
+            }
+            if (unsummarized.size <= RECENT_MESSAGES_TO_KEEP + 1) return null
 
-        val summarizable = unsummarized.dropLast(RECENT_MESSAGES_TO_KEEP)
-        if (summarizable.size < MIN_MESSAGES_PER_SUMMARY) return null
+            val summarizable = unsummarized.dropLast(RECENT_MESSAGES_TO_KEEP)
+            if (summarizable.size < MIN_MESSAGES_PER_SUMMARY) return null
 
-        val outputTokens = SUMMARY_OUTPUT_TOKENS.coerceAtMost(
-            (preparedContext.contextLength / 3).coerceAtLeast(GenerationSettings.MIN_MAX_TOKENS),
-        )
-        val sourceBudget = (
-            preparedContext.contextLength - outputTokens - SUMMARY_PROMPT_HEADROOM_TOKENS
-        ).coerceAtLeast(MIN_SOURCE_TOKENS)
-        var usedTokens = ContextBuilder.estimateTextTokens(session.summary.orEmpty())
-        val selected = ArrayList<TranscriptMessage>()
-        for (message in summarizable) {
-            val tokens = ContextBuilder.estimateTextTokens(formatMessage(message)) + 4
-            if (selected.isNotEmpty() && usedTokens + tokens > sourceBudget) break
-            selected += message
-            usedTokens += tokens
-        }
-        if (selected.size < MIN_MESSAGES_PER_SUMMARY) return null
+            val outputTokens = SUMMARY_OUTPUT_TOKENS.coerceAtMost(
+                (preparedContext.contextLength / 3).coerceAtLeast(GenerationSettings.MIN_MAX_TOKENS),
+            )
+            val sourceBudget = (
+                preparedContext.contextLength - outputTokens - SUMMARY_PROMPT_HEADROOM_TOKENS
+            ).coerceAtLeast(MIN_SOURCE_TOKENS)
+            var usedTokens = ContextBuilder.estimateTextTokens(session.summary.orEmpty())
+            val selected = ArrayList<TranscriptMessage>()
+            for (message in summarizable) {
+                val tokens = ContextBuilder.estimateTextTokens(formatMessage(message)) + 4
+                if (selected.isNotEmpty() && usedTokens + tokens > sourceBudget) break
+                selected += message
+                usedTokens += tokens
+            }
+            if (selected.size < MIN_MESSAGES_PER_SUMMARY) return null
 
-        return SummaryPlan(
-            chatId = session.id,
-            previousSummary = session.summary,
-            messages = selected,
-            untilMessageId = selected.last().id,
-        )
+            return SummaryPlan(
+                chatId = session.id,
+                previousSummary = session.summary,
+                messages = selected,
+                untilMessageId = selected.last().id,
+            )
         }
 
         fun shouldSummarize(context: PreparedContext): Boolean =

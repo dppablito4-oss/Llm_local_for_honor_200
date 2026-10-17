@@ -44,14 +44,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import android.view.HapticFeedbackConstants
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.prismai.llmhost.GenerationPerformance
 import com.prismai.llmhost.ui.components.InfinityLoadingIndicator
 import com.prismai.llmhost.ui.theme.*
@@ -96,24 +103,20 @@ internal fun MessageBubble(
                 horizontalAlignment = Alignment.End,
             ) {
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = userBubbleColor(),
-                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 4.dp),
+                    color = Color(0xFF27272A),
+                    contentColor = Color(0xFFF4F4F5),
                 ) {
                     SelectionContainer {
                         Text(
                             text = text,
-                            modifier = Modifier.padding(horizontal = 17.dp, vertical = 11.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp,
+                            ),
+                            color = Color(0xFFF4F4F5),
                         )
-                    }
-                }
-                if (text.isNotBlank()) {
-                    MessageAction(label = "Copy") {
-                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        copyTextToClipboard(context, label, text)
-                        Toast.makeText(context, "Copied $copyLabel", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -121,43 +124,49 @@ internal fun MessageBubble(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                    .padding(horizontal = 2.dp, vertical = 4.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AssistantBadge()
-                    Text(
-                        text = "Prism",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    PerformancePill(
-                        modifier = Modifier.weight(1f, fill = false),
-                        performance = performance,
-                        loading = showLoading,
-                    )
-                    if (showLoading) {
+                if (showLoading) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         InfinityLoadingIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = PrismViolet,
+                            modifier = Modifier.size(14.dp),
+                            color = PrismCyan,
                         )
+                        Text(
+                            text = if (parsedOutput?.hasReasoning == true && !parsedOutput.reasoningComplete) {
+                                "Razonando..."
+                            } else {
+                                "Generando respuesta..."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PrismCyan,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        performance?.takeIf { it.tokensPerSecond > 0.0 }?.let {
+                            Text(
+                                text = "· ${formatTokensPerSecond(it.tokensPerSecond)} t/s",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            )
+                        }
                     }
                 }
-                Spacer(modifier = Modifier.height(10.dp))
                 if (parsedOutput?.hasReasoning == true) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        border = BorderStroke(1.dp, prismGlassBorderColor()),
+                        border = BorderStroke(1.dp, Color(0xFF26262B)),
                         onClick = { userToggledReasoning = !reasoningExpanded },
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
                                 text = when {
                                     !parsedOutput.reasoningComplete && showLoading -> {
@@ -191,14 +200,14 @@ internal fun MessageBubble(
                         }
                     }
                     if (!parsedOutput.reasoningComplete && !showLoading) {
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "El razonamiento no llegó a una respuesta final. Puedes abrir el bloque para revisarlo y usar Continuar.",
+                            text = "El razonamiento no llegó a una respuesta final.",
                             style = MaterialTheme.typography.labelSmall,
                             color = PrismAmber,
                         )
                     }
-                    if (parsedOutput.answer.isNotBlank()) Spacer(modifier = Modifier.height(10.dp))
+                    if (parsedOutput.answer.isNotBlank()) Spacer(modifier = Modifier.height(8.dp))
                 }
                 val visibleAnswer = parsedOutput?.answer ?: text
                 if (visibleAnswer.isNotBlank()) {
@@ -206,21 +215,85 @@ internal fun MessageBubble(
                         EnhancedMarkdownText(text = visibleAnswer)
                     }
                 }
-                if (text.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(6.dp))
+                if (text.isNotBlank() && !showLoading) {
+                    Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        MessageAction(label = "Copy") {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            copyTextToClipboard(context, label, visibleAnswer.ifBlank { text })
-                            Toast.makeText(context, "Copied $copyLabel", Toast.LENGTH_SHORT).show()
+                        MinimalIconButton(
+                            label = "Copiar",
+                            onClick = {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                copyTextToClipboard(context, label, visibleAnswer.ifBlank { text })
+                                Toast.makeText(context, "Copiado al portapapeles", Toast.LENGTH_SHORT).show()
+                            },
+                        ) {
+                            // Copy Icon (two overlapping squares)
+                            val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            Canvas(modifier = Modifier.size(15.dp)) {
+                                val s = 1.6f
+                                // Front square
+                                drawRect(
+                                    color = color,
+                                    topLeft = Offset(size.width * 0.25f, size.height * 0.25f),
+                                    size = Size(size.width * 0.65f, size.height * 0.65f),
+                                    style = Stroke(width = s),
+                                )
+                                // Back square L-lines
+                                drawLine(
+                                    color = color,
+                                    start = Offset(size.width * 0.10f, size.height * 0.70f),
+                                    end = Offset(size.width * 0.10f, size.height * 0.10f),
+                                    strokeWidth = s,
+                                    cap = StrokeCap.Round,
+                                )
+                                drawLine(
+                                    color = color,
+                                    start = Offset(size.width * 0.10f, size.height * 0.10f),
+                                    end = Offset(size.width * 0.70f, size.height * 0.10f),
+                                    strokeWidth = s,
+                                    cap = StrokeCap.Round,
+                                )
+                            }
                         }
-                        MessageAction(label = "Report") {
-                            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                            showReportDialog = true
+                        MinimalIconButton(
+                            label = "Reportar",
+                            onClick = {
+                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                                showReportDialog = true
+                            },
+                        ) {
+                            // Flag / Report icon
+                            val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            Canvas(modifier = Modifier.size(15.dp)) {
+                                val s = 1.6f
+                                // Flagpole
+                                drawLine(
+                                    color = color,
+                                    start = Offset(size.width * 0.20f, size.height * 0.10f),
+                                    end = Offset(size.width * 0.20f, size.height * 0.90f),
+                                    strokeWidth = s,
+                                    cap = StrokeCap.Round,
+                                )
+                                // Flag triangle
+                                val flagPath = androidx.compose.ui.graphics.Path().apply {
+                                    moveTo(size.width * 0.20f, size.height * 0.15f)
+                                    lineTo(size.width * 0.85f, size.height * 0.35f)
+                                    lineTo(size.width * 0.20f, size.height * 0.55f)
+                                    close()
+                                }
+                                drawPath(flagPath, color = color.copy(alpha = 0.2f))
+                                drawPath(flagPath, color = color, style = Stroke(width = s))
+                            }
+                        }
+                        performance?.takeIf { it.tokensPerSecond > 0.0 }?.let {
+                            Text(
+                                text = "${formatTokensPerSecond(it.tokensPerSecond)} t/s",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            )
                         }
                     }
                 }
@@ -230,18 +303,23 @@ internal fun MessageBubble(
 }
 
 @Composable
-private fun MessageAction(label: String, onClick: () -> Unit) {
+private fun MinimalIconButton(
+    label: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .size(30.dp)
+            .semantics { contentDescription = label },
+        shape = RoundedCornerShape(15.dp),
         color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         onClick = onClick,
     ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelSmall,
-        )
+        Box(contentAlignment = Alignment.Center) {
+            icon()
+        }
     }
 }
 

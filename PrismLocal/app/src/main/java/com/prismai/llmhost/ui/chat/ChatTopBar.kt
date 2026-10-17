@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
@@ -40,7 +41,9 @@ import com.prismai.llmhost.ImportState
 import com.prismai.llmhost.RuntimeStatus
 import com.prismai.llmhost.ui.formatTokensPerSecond
 import com.prismai.llmhost.ui.polishedModelName
+import com.prismai.llmhost.ui.theme.PrismAmber
 import com.prismai.llmhost.ui.theme.PrismBlue
+import com.prismai.llmhost.ui.theme.PrismCyan
 import com.prismai.llmhost.ui.theme.PrismGreen
 
 @Composable
@@ -57,6 +60,7 @@ internal fun ChatTopBar(
     onOpenChats: () -> Unit,
     onOpenControls: () -> Unit,
     onSwitchModel: (String) -> Unit,
+    onNewChat: () -> Unit = {},
 ) {
     var modelMenuExpanded by remember { mutableStateOf(false) }
     val canSwitchModel = runtimeStatus != RuntimeStatus.GENERATING &&
@@ -68,69 +72,76 @@ internal fun ChatTopBar(
         color = Color.Black,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 0.dp,
+        border = BorderStroke(0.5.dp, Color(0xFF1E1E22)),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(if (collapsed) 56.dp else 64.dp)
-                .padding(horizontal = 2.dp),
+                .height(52.dp)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            HeaderIconButton(label = "Open sidebar", kind = HeaderIcon.Menu, onClick = onOpenChats)
+            // Left: Sidebar Toggle
+            HeaderIconButton(
+                label = "Open sidebar",
+                kind = HeaderIcon.Menu,
+                onClick = onOpenChats,
+            )
 
-            Box(modifier = Modifier.weight(1f)) {
+            // Center: Model Selector Pill (ChatGPT / Gemini style)
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .padding(horizontal = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color.Transparent,
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF161619),
+                    border = BorderStroke(1.dp, Color(0xFF26262B)),
                     contentColor = MaterialTheme.colorScheme.onSurface,
                     enabled = canSwitchModel,
                     onClick = { modelMenuExpanded = true },
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = modelName?.let(::polishedModelName) ?: "Select a model",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (!collapsed) {
-                                Text(
-                                    text = topBarSubtitle(
-                                        runtimeStatus,
-                                        importStatus,
-                                        importState,
-                                        generationPerformance,
-                                        thermalGovernorState,
-                                    ),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                        // Live status dot
+                        val statusDotColor = when (runtimeStatus) {
+                            RuntimeStatus.GENERATING -> PrismCyan
+                            RuntimeStatus.LOADING_MODEL -> PrismAmber
+                            RuntimeStatus.ERROR -> Color(0xFFEF4444)
+                            else -> if (modelName != null) PrismGreen else MaterialTheme.colorScheme.outline
                         }
+                        Canvas(modifier = Modifier.size(6.dp)) {
+                            drawCircle(color = statusDotColor)
+                        }
+
+                        Text(
+                            text = modelName?.let(::polishedModelName) ?: "Select a model",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+
                         val chevronColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        Canvas(modifier = Modifier.size(14.dp)) {
+                        Canvas(modifier = Modifier.size(10.dp)) {
                             drawLine(
                                 color = chevronColor,
-                                start = Offset(size.width * 0.20f, size.height * 0.38f),
-                                end = Offset(size.width * 0.50f, size.height * 0.68f),
-                                strokeWidth = 2.2f,
+                                start = Offset(size.width * 0.15f, size.height * 0.35f),
+                                end = Offset(size.width * 0.50f, size.height * 0.70f),
+                                strokeWidth = 2.0f,
                                 cap = StrokeCap.Round,
                             )
                             drawLine(
                                 color = chevronColor,
-                                start = Offset(size.width * 0.50f, size.height * 0.68f),
-                                end = Offset(size.width * 0.80f, size.height * 0.38f),
-                                strokeWidth = 2.2f,
+                                start = Offset(size.width * 0.50f, size.height * 0.70f),
+                                end = Offset(size.width * 0.85f, size.height * 0.35f),
+                                strokeWidth = 2.0f,
                                 cap = StrokeCap.Round,
                             )
                         }
@@ -141,8 +152,8 @@ internal fun ChatTopBar(
                     expanded = modelMenuExpanded,
                     onDismissRequest = { modelMenuExpanded = false },
                     modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    containerColor = Color(0xFF141416),
+                    border = BorderStroke(1.dp, Color(0xFF28282D)),
                 ) {
                     Text(
                         text = "Models on this device",
@@ -172,7 +183,7 @@ internal fun ChatTopBar(
                             },
                         )
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = Color(0xFF28282D))
                     DropdownMenuItem(
                         text = { Text("Manage and import models", color = PrismBlue) },
                         onClick = {
@@ -183,29 +194,46 @@ internal fun ChatTopBar(
                 }
             }
 
-            HeaderIconButton(label = "Models and settings", kind = HeaderIcon.Settings, onClick = onOpenControls)
+            // Right: New Chat + Settings
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                HeaderIconButton(
+                    label = "New chat",
+                    kind = HeaderIcon.NewChat,
+                    onClick = onNewChat,
+                )
+                HeaderIconButton(
+                    label = "Settings and controls",
+                    kind = HeaderIcon.Settings,
+                    onClick = onOpenControls,
+                )
+            }
         }
     }
 }
 
-private enum class HeaderIcon { Menu, Settings }
+private enum class HeaderIcon { Menu, Settings, NewChat }
 
 @Composable
 private fun HeaderIconButton(label: String, kind: HeaderIcon, onClick: () -> Unit) {
     val iconColor = MaterialTheme.colorScheme.onSurface
     Surface(
-        modifier = Modifier.size(44.dp).semantics { contentDescription = label },
-        shape = RoundedCornerShape(22.dp),
+        modifier = Modifier
+            .size(38.dp)
+            .semantics { contentDescription = label },
+        shape = RoundedCornerShape(19.dp),
         color = Color.Transparent,
         contentColor = iconColor,
         onClick = onClick,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Canvas(modifier = Modifier.size(22.dp)) {
-                val stroke = 2.2f
+            Canvas(modifier = Modifier.size(20.dp)) {
+                val stroke = 2.0f
                 when (kind) {
                     HeaderIcon.Menu -> {
-                        listOf(0.27f, 0.50f, 0.73f).forEach { y ->
+                        listOf(0.28f, 0.50f, 0.72f).forEach { y ->
                             drawLine(
                                 color = iconColor,
                                 start = Offset(size.width * 0.18f, size.height * y),
@@ -215,12 +243,36 @@ private fun HeaderIconButton(label: String, kind: HeaderIcon, onClick: () -> Uni
                             )
                         }
                     }
+                    HeaderIcon.NewChat -> {
+                        // Minimalist compose / new chat icon: square with pen stroke
+                        // Draw square body with open top-right
+                        val path = Path().apply {
+                            moveTo(size.width * 0.75f, size.height * 0.50f)
+                            lineTo(size.width * 0.75f, size.height * 0.80f)
+                            lineTo(size.width * 0.20f, size.height * 0.80f)
+                            lineTo(size.width * 0.20f, size.height * 0.25f)
+                            lineTo(size.width * 0.50f, size.height * 0.25f)
+                        }
+                        drawPath(
+                            path = path,
+                            color = iconColor,
+                            style = Stroke(width = stroke, cap = StrokeCap.Round),
+                        )
+                        // Pen line
+                        drawLine(
+                            color = iconColor,
+                            start = Offset(size.width * 0.42f, size.height * 0.58f),
+                            end = Offset(size.width * 0.80f, size.height * 0.20f),
+                            strokeWidth = stroke,
+                            cap = StrokeCap.Round,
+                        )
+                    }
                     HeaderIcon.Settings -> {
                         listOf(0.28f, 0.50f, 0.72f).forEachIndexed { index, y ->
                             drawLine(
                                 color = iconColor,
-                                start = Offset(size.width * 0.12f, size.height * y),
-                                end = Offset(size.width * 0.88f, size.height * y),
+                                start = Offset(size.width * 0.14f, size.height * y),
+                                end = Offset(size.width * 0.86f, size.height * y),
                                 strokeWidth = stroke,
                                 cap = StrokeCap.Round,
                             )

@@ -1997,39 +1997,34 @@ std::string Engine::decodeTokens(int generation_id, const std::vector<int32_t>& 
         return "";
     }
 
-    std::vector<llama_token> llama_tokens;
-    llama_tokens.reserve(tokens.size());
-    for (const int32_t token : tokens) {
-        llama_tokens.push_back(static_cast<llama_token>(token));
+    std::string text;
+    char buf[128];
+    for (const int32_t token_id : tokens) {
+        const llama_token token = static_cast<llama_token>(token_id);
+        const int32_t n_chars = llama_token_to_piece(
+            runtime->vocab,
+            token,
+            buf,
+            static_cast<int32_t>(sizeof(buf)),
+            0,
+            false);
+        if (n_chars > 0 && n_chars <= static_cast<int32_t>(sizeof(buf))) {
+            text.append(buf, static_cast<size_t>(n_chars));
+        } else if (n_chars < 0) {
+            std::string piece;
+            piece.resize(static_cast<size_t>(-n_chars));
+            const int32_t actual = llama_token_to_piece(
+                runtime->vocab,
+                token,
+                piece.data(),
+                static_cast<int32_t>(piece.size()),
+                0,
+                false);
+            if (actual > 0) {
+                text.append(piece.data(), static_cast<size_t>(actual));
+            }
+        }
     }
-
-    int32_t needed = llama_detokenize(
-        runtime->vocab,
-        llama_tokens.data(),
-        static_cast<int32_t>(llama_tokens.size()),
-        nullptr,
-        0,
-        false,
-        false);
-    if (needed < 0) {
-        needed = -needed;
-    }
-    if (needed <= 0) {
-        return "";
-    }
-    std::string text(static_cast<size_t>(needed), '\0');
-    const int32_t actual = llama_detokenize(
-        runtime->vocab,
-        llama_tokens.data(),
-        static_cast<int32_t>(llama_tokens.size()),
-        text.data(),
-        needed,
-        false,
-        false);
-    if (actual <= 0) {
-        return "";
-    }
-    text.resize(static_cast<size_t>(actual));
     return text;
 }
 

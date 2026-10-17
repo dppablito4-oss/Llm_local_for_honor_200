@@ -19,8 +19,7 @@ PrismLocal ya tiene una base valida para chat local multimodelo:
 - memoria y vectores persistidos en dos bases SQLite separadas;
 - streaming, cancelacion, metricas y reaccion a presion de memoria.
 
-Los huecos principales son el resumen acumulativo, el aislamiento de memoria por
-chat y la conexion efectiva de RAG con la generacion normal.
+Los hitos de Fase 3 (resumen acumulativo de conversaciones largas) y Fase 4 (aislamiento de memoria en Room con scope GLOBAL vs CHAT y migración automática desde SQLite) ya están implementados y validados. Los huecos principales pendientes son la confirmación asistida en UI, la conexión efectiva de RAG con la generación normal y la ingesta nativa de PDFs.
 
 ## Flujo de inferencia
 

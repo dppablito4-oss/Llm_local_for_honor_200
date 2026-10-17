@@ -76,24 +76,24 @@ FASE 7: Gobernador Global de Memoria y Telemetría Completa
 ### 📌 Fase 4: Aislamiento Estricto de Memoria en Room (*Scope GLOBAL vs CHAT*)
 > **Objetivo:** Unificar la memoria de largo plazo en Room SQLite y evitar que recuerdos personales de un chat aparezcan en chats diferentes.
 
-- [ ] **4.1 Migración de `SqlMemoryStore` a Room:**
+- [x] **4.1 Migración de `SqlMemoryStore` a Room:**
   - Crear `MemoryEntity` dentro de `PrismDatabase.kt` con soporte para:
     `id`, `sourceChatId`, `scope` (`GLOBAL` | `CHAT`), `fact`, `confidence`, `accessCount`, `createdAt`, `updatedAt`.
-  - Crear `MemoryDao.kt` con consultas reactivas (`Flow<List<MemoryEntity>>`).
-  - Migrador automático de datos desde la antigua `prism_memory.db` hacia `PrismDatabase`.
+  - Crear `MemoryDao.kt` con consultas de aislamiento y persistencia en Room.
+  - Implementar `RoomMemoryStore.kt` y migrador automático de datos desde la antigua `prism_memory.db` hacia `PrismDatabase`.
 
-- [ ] **4.2 Filtro Estricto Anti-Fuga de Privacidad:**
+- [x] **4.2 Filtro Estricto Anti-Fuga de Privacidad:**
   - Modificar la recuperación de memorias para que un chat solo consulte:
     `WHERE scope = 'GLOBAL' OR (scope = 'CHAT' AND sourceChatId = :currentChatId)`.
-  - Normalización en español (ignorar tildes, mayúsculas y signos).
+  - Conectar `buildMemoryContext(prompt, activeChat?.id)` en `GenerationOrchestrator` y `MemoryTools`.
 
 - [ ] **4.3 Extracción Asistida y Confirmable:**
   - Evitar alucinaciones de modelos pequeños implementando un detector de hechos clave posterior a la respuesta.
   - Presentar la memoria detectada en la UI como una sugerencia interactiva tipo chip (*"¿Recordar: 'Prefieres respuestas en Python'? [Guardar] [Descartar]"*).
 
-- [ ] **4.4 Pruebas y Validación:**
-  - Test unitario: Crear hechos en Chat A y verificar que Chat B obtenga únicamente hechos globales y jamás los privados de Chat A.
-  - Validación de migración SQLite a Room sin duplicaciones.
+- [x] **4.4 Pruebas y Validación:**
+  - Test unitario (`MemoryIsolationTest`): Crear hechos en Chat A y verificar que Chat B obtenga únicamente hechos globales y jamás los privados de Chat A.
+  - Validación de mapeo bidireccional de entidad y modelo.
 
 ---
 

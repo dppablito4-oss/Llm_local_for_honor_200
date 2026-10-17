@@ -202,6 +202,8 @@ class InferenceService : Service() {
     private lateinit var webSearchTools: com.prismai.llmhost.agent.tools.WebSearchTools
     private lateinit var systemHandlerTools: com.prismai.llmhost.agent.tools.SystemTools
     private lateinit var workspaceTools: com.prismai.llmhost.agent.tools.WorkspaceTools
+    private lateinit var diffusionManager: com.prismai.llmhost.diffusion.DiffusionManager
+    private lateinit var diffusionTools: com.prismai.llmhost.agent.tools.DiffusionTools
 
     // ── Chat state delegated to ChatManager ───────────────────────────
     private var nextTranscriptId
@@ -538,6 +540,8 @@ class InferenceService : Service() {
         workspaceTools = com.prismai.llmhost.agent.tools.WorkspaceTools(
             rootDir = com.prismai.llmhost.agent.tools.WorkspaceTools.defaultRoot(filesDir),
         )
+        diffusionManager = com.prismai.llmhost.diffusion.DiffusionManager(this)
+        diffusionTools = com.prismai.llmhost.agent.tools.DiffusionTools(diffusionManager, modelStorageManager)
 
         // ── Phase E: benchmark classes ──────────────────────────────────
         benchmarkStore = com.prismai.llmhost.benchmark.BenchmarkStore(
@@ -850,6 +854,18 @@ class InferenceService : Service() {
         initiatedByBackground: Boolean = false,
     ): String {
         chatRepositoryReady.await()
+        val trimmed = prompt.trim()
+        val isImageCmd = trimmed.startsWith("/image ", ignoreCase = true) ||
+                         trimmed.startsWith("/imagine ", ignoreCase = true) ||
+                         trimmed.startsWith("/sd ", ignoreCase = true)
+        if (isImageCmd) {
+            val imgPrompt = when {
+                trimmed.startsWith("/image ", ignoreCase = true) -> trimmed.removePrefix("/image ").trim()
+                trimmed.startsWith("/imagine ", ignoreCase = true) -> trimmed.removePrefix("/imagine ").trim()
+                else -> trimmed.removePrefix("/sd ").trim()
+            }
+            return generateImageDirect(imgPrompt)
+        }
         cancelRollingSummaryAndJoin()
         var activeJob: Job? = null
         operationMutex.withLock {
@@ -974,6 +990,89 @@ class InferenceService : Service() {
         return id
     }
 
+    private fun updateTranscriptMessage(id: Long, newText: String) {
+        synchronized(transcriptLock) {
+            val list = _transcript.value.toMutableList()
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx >= 0) {
+                list[idx] = list[idx].copy(text = newText)
+                _transcript.value = list
+            }
+        }
+        touchCurrentChat(_transcript.value, updateTitle = false)
+        persistTranscriptThrottled(force = true)
+    }
+
+    private suspend fun generateImageDirect(imagePrompt: String): String {
+        appendTranscriptMessage(TranscriptRole.USER, "/image $imagePrompt")
+        val assistantMsgId = appendTranscriptMessage(
+            TranscriptRole.ASSISTANT,
+            "🎨 Generando imagen local con Stable Diffusion: \"$imagePrompt\"..."
+        )
+        _isGenerating.value = true
+        startGenerationForeground()
+        try {
+            if (!diffusionManager.isLoaded()) {
+                val installed = modelStorageManager.listInstalledModels()
+                val diffModelId = installed.firstOrNull { id ->
+                    id.contains("sd", ignoreCase = true) ||
+                    id.contains("diffusion", ignoreCase = true) ||
+                    id.contains("turbo", ignoreCase = true)
+                }
+
+                if (diffModelId == null) {
+                    val notFoundMsg = "⚠️ No hay ningún modelo de imagen (Stable Diffusion) instalado en el teléfono.\n\nVe a **Modelos > Descargas** e instala **SDXS 512 (Ultra Rápido)** o **SD-Turbo** para poder generar imágenes."
+                    updateTranscriptMessage(assistantMsgId, notFoundMsg)
+                    return notFoundMsg
+                }
+
+                val activeModel = modelStorageManager.activeModelInfo(diffModelId)
+                if (activeModel == null) {
+                    val err = "❌ No se pudo resolver el archivo del modelo de difusión $diffModelId."
+                    updateTranscriptMessage(assistantMsgId, err)
+                    return err
+                }
+
+                val loaded = diffusionManager.loadModel(
+                    modelPath = activeModel.file.absolutePath,
+                    threads = 4,
+                    onGpu = true,
+                )
+                if (!loaded) {
+                    val err = "❌ Falló la carga del modelo de difusión en la GPU/CPU."
+                    updateTranscriptMessage(assistantMsgId, err)
+                    return err
+                }
+            }
+
+            val result = diffusionManager.generateImage(
+                prompt = imagePrompt,
+                width = 512,
+                height = 512,
+                steps = 4,
+                cfgScale = 1.0f,
+            )
+
+            return result.fold(
+                onSuccess = { file ->
+                    val successMsg = "🎨 Imagen generada con Stable Diffusion:\n\n![${imagePrompt.take(50)}](file://${file.absolutePath})\n\n*Guardada en ${file.name}*"
+                    updateTranscriptMessage(assistantMsgId, successMsg)
+                    publishUiEvent("Imagen generada correctamente")
+                    successMsg
+                },
+                onFailure = { error ->
+                    val failureMsg = "❌ Error al generar la imagen: ${error.message ?: "Fallo desconocido"}"
+                    updateTranscriptMessage(assistantMsgId, failureMsg)
+                    publishUiEvent("Error de imagen: ${error.message}")
+                    failureMsg
+                }
+            )
+        } finally {
+            _isGenerating.value = false
+            stopGenerationForeground()
+        }
+    }
+
     private fun appendToolResult(result: AgentToolResult) {
         appendTranscriptMessage(
             TranscriptRole.TOOL,
@@ -1062,6 +1161,8 @@ class InferenceService : Service() {
             "cancel_background_task" -> backgroundAgentHandlerTools.cancelBackgroundTask(call, confirmed)
             // ── Web search ───────────────────────────────────────────────────
             "web_search" -> webSearchTools.webSearch(call)
+            // ── Image generation (Stable Diffusion) ───────────────────────────
+            "generate_image" -> diffusionTools.generateImage(call)
             else -> AgentToolResult(call, success = false, summary = "Unknown tool: ${call.name}")
         }
 
@@ -1507,6 +1608,7 @@ class InferenceService : Service() {
         if (::backgroundAgentManager.isInitialized) backgroundAgentManager.shutdown()
         serviceScope.cancel()
         if (::voiceIoManager.isInitialized) voiceIoManager.shutdown()
+        if (::diffusionManager.isInitialized) diffusionManager.unload()
         super.onDestroy()
     }
 

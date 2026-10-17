@@ -643,6 +643,22 @@ object AgentToolRegistry {
             requiredArguments = setOf("task_id"),
             maxStringLengths = mapOf("task_id" to 50),
         ),
+
+        // Phase SD — On-device image generation
+        AgentToolDefinition(
+            name = "generate_image",
+            description = "Generate an image locally from a text prompt using on-device Stable Diffusion.",
+            risk = AgentToolRisk.SAFE,
+            argumentSchema = """{"type":"object","properties":{"prompt":{"type":"string","description":"Visual description of the image to generate"},"steps":{"type":"integer","description":"Diffusion steps (1-10, default 4)"},"width":{"type":"integer","description":"Image width (default 512)"},"height":{"type":"integer","description":"Image height (default 512)"}},"required":["prompt"]}""",
+            requiredArguments = setOf("prompt"),
+            maxStringLengths = mapOf("prompt" to 1000),
+            intRanges = mapOf(
+                "steps" to AgentToolIntRange(1, 20),
+                "width" to AgentToolIntRange(256, 1024),
+                "height" to AgentToolIntRange(256, 1024),
+            ),
+            returnContract = """{"success":true,"image_path":"string","prompt":"string"}""",
+        ),
     )
 
     fun availableDefinitions(): List<AgentToolDefinition> =

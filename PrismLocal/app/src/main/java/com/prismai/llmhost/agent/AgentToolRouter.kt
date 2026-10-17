@@ -52,6 +52,8 @@ class AgentToolRouter(
             "search_knowledge", "fetch_grokipedia_article", "list_knowledge_packs",
             // Phase 7a Background
             "check_background_tasks",
+            // Phase SD Image Generation
+            "generate_image",
         )
     }
 

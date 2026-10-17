@@ -10,9 +10,12 @@ import com.prismai.llmhost.model.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,6 +32,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import android.graphics.BitmapFactory
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import java.io.File
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -520,6 +528,7 @@ internal sealed class EnhancedBlock {
     object Blank : EnhancedBlock()
     object Divider : EnhancedBlock()
     data class Quote(val annotated: AnnotatedString) : EnhancedBlock()
+    data class Image(val alt: String, val path: String) : EnhancedBlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +597,11 @@ internal fun enhancedMarkdownBlocks(text: String): List<EnhancedBlock> {
         blocks += when {
             trimmed.isBlank() -> EnhancedBlock.Blank
             trimmed == "---" || trimmed == "***" -> EnhancedBlock.Divider
+            trimmed.startsWith("![") && trimmed.contains("](") && trimmed.endsWith(")") -> {
+                val alt = trimmed.substringAfter("![").substringBefore("](")
+                val path = trimmed.substringAfter("](").removeSuffix(")")
+                EnhancedBlock.Image(alt = alt, path = path)
+            }
             trimmed.startsWith("### ") -> EnhancedBlock.Heading(
                 parseInlineMarkdownEnhanced(trimmed.removePrefix("### ").trim()),
                 level = 3,
@@ -749,6 +763,72 @@ fun EnhancedMarkdownText(
                 is EnhancedBlock.Table -> MarkdownTable(
                     markdown = block.raw,
                     modifier = Modifier.fillMaxWidth(),
+                )
+                is EnhancedBlock.Image -> LocalImageCard(
+                    alt = block.alt,
+                    filePath = block.path,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun LocalImageCard(
+    alt: String,
+    filePath: String,
+    modifier: Modifier = Modifier,
+) {
+    val cleanPath = filePath.removePrefix("file://")
+    val file = remember(cleanPath) { File(cleanPath) }
+    val bitmap = remember(cleanPath) {
+        if (file.exists()) {
+            runCatching {
+                BitmapFactory.decodeFile(cleanPath)?.asImageBitmap()
+            }.getOrNull()
+        } else null
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF1E1E22),
+        border = BorderStroke(1.dp, Color(0xFF2E2E34)),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = alt.ifBlank { "Imagen generada" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .clip(RoundedCornerShape(16.dp)),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Imagen: ${file.name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                    )
+                }
+            }
+            if (alt.isNotBlank()) {
+                Text(
+                    text = alt,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

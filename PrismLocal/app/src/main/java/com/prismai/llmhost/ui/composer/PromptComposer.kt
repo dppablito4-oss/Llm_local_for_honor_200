@@ -20,12 +20,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -102,16 +107,46 @@ internal fun PromptComposer(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 5.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            var addMenuExpanded by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                ComposerIconButton(
-                    action = ComposerAction.Add,
-                    enabled = enabled && !isGenerating,
-                    onClick = onAddAttachment,
-                )
+                Box {
+                    ComposerIconButton(
+                        action = ComposerAction.Add,
+                        enabled = enabled && !isGenerating,
+                        onClick = { addMenuExpanded = true },
+                    )
+                    DropdownMenu(
+                        expanded = addMenuExpanded,
+                        onDismissRequest = { addMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Adjuntar archivo") },
+                            onClick = {
+                                addMenuExpanded = false
+                                onAddAttachment()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🎨 Generar imagen (/image)") },
+                            onClick = {
+                                addMenuExpanded = false
+                                val current = prompt.trim()
+                                val next = if (current.startsWith("/image", ignoreCase = true)) {
+                                    prompt
+                                } else if (current.isBlank()) {
+                                    "/image "
+                                } else {
+                                    "/image $current"
+                                }
+                                onPromptChange(next)
+                            },
+                        )
+                    }
+                }
                 ComposerTextInput(
                     modifier = Modifier
                         .weight(1f)

@@ -84,6 +84,15 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/third_party)
 
 add_subdirectory(${LLAMA_CPP_DIR} ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp)
 
+set(SD_CPP_DIR ${CMAKE_CURRENT_LIST_DIR}/third_party/stable-diffusion.cpp)
+set(SD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SD_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(SD_WEBP OFF CACHE BOOL "" FORCE)
+set(SD_WEBM OFF CACHE BOOL "" FORCE)
+set(SD_USE_UPSTREAM_GGML ON CACHE BOOL "" FORCE)
+set(SD_GGML_SOURCE_DIR "${LLAMA_CPP_DIR}/ggml" CACHE PATH "" FORCE)
+add_subdirectory(${SD_CPP_DIR} ${CMAKE_CURRENT_BINARY_DIR}/stable-diffusion.cpp)
+
 add_library(llama_speculative STATIC
     ${LLAMA_CPP_DIR}/common/speculative.cpp
     ${LLAMA_CPP_DIR}/common/sampling.cpp
@@ -108,6 +117,8 @@ target_compile_options(llama_speculative PRIVATE -Wno-cast-qual)
 add_library(llmhost SHARED
     llmhost_jni.cpp
     Engine.cpp
+    diffusion/DiffusionEngine.cpp
+    diffusion/diffusion_jni.cpp
 )
 
 if(LLMHOST_DEBUG_HOOKS)
@@ -130,12 +141,15 @@ endif()
 
 target_include_directories(llmhost PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/diffusion
     ${LLAMA_CPP_DIR}/include
     ${LLAMA_CPP_DIR}/ggml/include
     ${LLAMA_CPP_DIR}/common
+    ${SD_CPP_DIR}/include
+    ${SD_CPP_DIR}/thirdparty
 )
 
-target_link_libraries(llmhost PRIVATE llama ggml llama_speculative log android vulkan)
+target_link_libraries(llmhost PRIVATE llama ggml llama_speculative stable-diffusion log android vulkan)
 
 target_link_options(llmhost PRIVATE
     "-Wl,-z,max-page-size=16384"

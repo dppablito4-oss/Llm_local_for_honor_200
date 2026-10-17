@@ -106,6 +106,9 @@ object ToolCapabilityMapping {
         "list_workspace_files" to setOf(Capability.FILE_READ),
         "read_workspace_file" to setOf(Capability.FILE_READ),
         "search_workspace_files" to setOf(Capability.FILE_READ),
+
+        // Phase SD Image Generation
+        "generate_image" to noCapabilities,
     )
 
     /**

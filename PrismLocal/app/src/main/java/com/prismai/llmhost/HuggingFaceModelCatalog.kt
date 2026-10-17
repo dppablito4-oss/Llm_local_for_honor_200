@@ -25,6 +25,7 @@ data class HuggingFaceModelEntry(
      * available.
      */
     val curated: Boolean = true,
+    val isDiffusion: Boolean = false,
 ) {
     val revision: String = "main"
     val downloadUrl: String
@@ -412,6 +413,46 @@ object HuggingFaceModelCatalog {
             parameters = "3B",
             quantization = "Q4_K_M",
             notes = "Llama 3.2 3B sin censura (abliterated), Q4_K_M con imatrix. Aproximadamente 5,8 % más grande que la versión normal; ofrece más calidad que 1B. Solo texto.",
+        ),
+        // --- Modelos de Imagen (Stable Diffusion on-device) ---
+        HuggingFaceModelEntry(
+            id = "sdxs_512_q8_0",
+            name = "SDXS 512 (Ultra Rápido 1-Paso)",
+            repoId = "concedo/sdxs-512-tinySDdistilled-GGUF",
+            fileName = "sdxs-512-tinySDdistilled_Q8_0.gguf",
+            expectedBytes = 682_847_200L,
+            expectedSha256 = "409ab23582ee074c6b9d5395784fc0741b0599fb9d138686c69087c71678eb6a",
+            license = "OpenRAIL++",
+            parameters = "0.4B",
+            quantization = "Q8_0",
+            notes = "Modelo de difusión destilado ultra-rápido de 1 paso. Genera imágenes de 512x512 en segundos en el dispositivo.",
+            isDiffusion = true,
+        ),
+        HuggingFaceModelEntry(
+            id = "sd_turbo_f16_q8_0",
+            name = "SD-Turbo (ADD 1-4 Pasos)",
+            repoId = "Green-Sky/SD-Turbo-GGUF",
+            fileName = "sd_turbo-f16-q8_0.gguf",
+            expectedBytes = 2_023_745_376L,
+            expectedSha256 = "d50be7655f0a554cf8041c145d88b210bd5f3c545423119dee62ae08cae51580",
+            license = "Stability AI Community",
+            parameters = "1.3B",
+            quantization = "Q8_0",
+            notes = "Modelo Turbo de Stability AI con destilación adversarial (ADD). Alta fidelidad en solo 1 a 4 pasos.",
+            isDiffusion = true,
+        ),
+        HuggingFaceModelEntry(
+            id = "sd_v15_q4_0",
+            name = "Stable Diffusion v1.5 (Q4_0)",
+            repoId = "second-state/stable-diffusion-v1-5-GGUF",
+            fileName = "stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf",
+            expectedBytes = 1_566_768_416L,
+            expectedSha256 = "b8944e9fe0b69b36ae1b5bb0185b3a7b8ef14347fe0fa9af6c64c4829022261f",
+            license = "CreativeML OpenRAIL-M",
+            parameters = "1.0B",
+            quantization = "Q4_0",
+            notes = "Clásico Stable Diffusion v1.5 podado y cuantizado en Q4_0. Compatible con una amplia variedad de prompts y estilos.",
+            isDiffusion = true,
         ),
     )
 

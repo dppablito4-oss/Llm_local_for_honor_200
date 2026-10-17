@@ -77,18 +77,21 @@ class DiffusionTools(
         )
 
         result.fold(
-            onSuccess = { file ->
+            onSuccess = { output ->
+                val file = output.file
                 AgentToolResult(
                     call = call,
                     success = true,
-                    summary = "Imagen generada con éxito:\n\n![${prompt.take(40)}](file://${file.absolutePath})",
+                    summary = "Imagen generada con éxito (⚡ ${"%.2f".format(output.generationTimeSec)}s):\n\n![${prompt.take(40)}](file://${file.absolutePath})",
                     details = JSONObject().apply {
                         put("image_path", file.absolutePath)
                         put("file_uri", "file://${file.absolutePath}")
                         put("prompt", prompt)
                         put("width", width)
                         put("height", height)
-                        put("steps", steps)
+                        put("steps", output.steps)
+                        put("seed", output.seed)
+                        put("generation_time_sec", output.generationTimeSec)
                     },
                 )
             },

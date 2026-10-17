@@ -23,6 +23,7 @@ struct DiffusionEngine::Impl {
     sd_ctx_t* sd_ctx = nullptr;
     std::atomic<bool> cancel_requested{false};
     ProgressCallback active_progress_cb = nullptr;
+    bool enable_vae_tiling = true;
 };
 
 static void sd_progress_adapter(int step, int steps, float time, void* data) {
@@ -52,8 +53,14 @@ bool DiffusionEngine::loadModel(
         impl_->sd_ctx = nullptr;
     }
 
-    LOGI("Loading diffusion model: %s (threads=%d, gpu=%d, vae_tiling=%d)",
-         model_path.c_str(), n_threads, on_gpu ? 1 : 0, enable_vae_tiling ? 1 : 0);
+    impl_->enable_vae_tiling = enable_vae_tiling;
+
+    // Snapdragon 7 Gen 3 topology: exactly 4 Performance cores (Cortex-A715)
+    int threads_to_use = (n_threads > 0 && n_threads <= 4) ? n_threads : 4;
+
+    LOGI("Loading diffusion model: %s (threads=%d, gpu=%d, vae_tiling=%d, taesd=%s)",
+         model_path.c_str(), threads_to_use, on_gpu ? 1 : 0, enable_vae_tiling ? 1 : 0,
+         taesd_path.empty() ? "NONE" : taesd_path.c_str());
 
     sd_ctx_params_t params;
     sd_ctx_params_init(&params);
@@ -65,10 +72,14 @@ bool DiffusionEngine::loadModel(
     if (!taesd_path.empty()) {
         params.taesd_path = taesd_path.c_str();
     }
-    params.n_threads = n_threads > 0 ? n_threads : 4;
-    params.wtype = SD_TYPE_COUNT; // Auto-detect quantization
+    params.n_threads = threads_to_use;
+    params.wtype = SD_TYPE_COUNT; // Auto-detect quantization (e.g. Q8_0)
+    params.rng_type = STD_DEFAULT_RNG;
     params.enable_mmap = true;
-    params.diffusion_flash_attn = true;
+
+    // Flash-attention on ARMv9 CPU; disable on mobile GPU where compute shaders may not support it
+    params.diffusion_flash_attn = !on_gpu;
+    params.flash_attn = !on_gpu;
 
     sd_ctx_t* ctx = new_sd_ctx(&params);
     if (!ctx) {
@@ -118,9 +129,10 @@ DiffusionResult DiffusionEngine::generate(
     gen_params.width = (width > 0 && width % 8 == 0) ? width : 512;
     gen_params.height = (height > 0 && height % 8 == 0) ? height : 512;
     gen_params.seed = seed;
-    gen_params.sample_params.sample_steps = steps > 0 ? steps : 4;
+    gen_params.sample_params.sample_steps = steps > 0 ? steps : 1;
     gen_params.sample_params.guidance.txt_cfg = cfg_scale;
     gen_params.batch_count = 1;
+    gen_params.vae_tiling_params.enabled = impl_->enable_vae_tiling;
 
     // Use fast Euler A or model default
     gen_params.sample_params.sample_method = sd_get_default_sample_method(ctx);

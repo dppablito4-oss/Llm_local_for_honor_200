@@ -59,5 +59,13 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+        <!-- Permite cargar el driver OpenCL de Qualcomm Adreno en el Honor 200 -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+        <!-- Soporte para clientes con Pixel/Mali o wrappers Vulkan -->
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
     </application>
 </manifest>

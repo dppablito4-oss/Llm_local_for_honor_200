@@ -1017,6 +1017,76 @@ class InferenceService : Service() {
         persistTranscriptThrottled(force = true)
     }
 
+    private data class ImageCommandArgs(
+        val cleanPrompt: String,
+        val steps: Int = 1,
+        val seed: Long = System.currentTimeMillis(),
+        val skipEnhancer: Boolean = false,
+    )
+
+    private fun parseImageCommandArgs(rawPrompt: String): ImageCommandArgs {
+        var steps = 1
+        var seed = System.currentTimeMillis()
+        var skipEnhancer = false
+
+        val tokens = rawPrompt.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val promptWords = mutableListOf<String>()
+        var i = 0
+        while (i < tokens.size) {
+            when (tokens[i].lowercase()) {
+                "--steps" -> {
+                    steps = tokens.getOrNull(i + 1)?.toIntOrNull()?.coerceIn(1, 8) ?: 1
+                    i += 2
+                }
+                "--seed" -> {
+                    seed = tokens.getOrNull(i + 1)?.toLongOrNull() ?: seed
+                    i += 2
+                }
+                "--raw" -> {
+                    skipEnhancer = true
+                    i += 1
+                }
+                else -> {
+                    promptWords.add(tokens[i])
+                    i += 1
+                }
+            }
+        }
+        return ImageCommandArgs(
+            cleanPrompt = promptWords.joinToString(" ").trim(),
+            steps = steps,
+            seed = seed,
+            skipEnhancer = skipEnhancer
+        )
+    }
+
+    private fun enhanceImagePrompt(prompt: String, skipEnhancer: Boolean): String {
+        if (skipEnhancer || prompt.isBlank()) return prompt
+        val translations = mapOf(
+            "un " to "a ", "una " to "a ", "el " to "the ", "la " to "the ", "los " to "the ", "las " to "the ",
+            "gatito" to "kitten", "gato" to "cat", "perro" to "dog", "perrito" to "puppy",
+            "astronauta" to "astronaut", "en marte" to "on mars", "en el espacio" to "in outer space",
+            "espacio exterior" to "outer space", "marte" to "mars", "luna" to "moon",
+            "fondo de pantalla" to "wallpaper", "hiperrealista" to "hyperrealistic",
+            "iluminacion cinematografica" to "cinematic lighting", "iluminación cinematográfica" to "cinematic lighting",
+            "primer plano" to "close up portrait", "atardecer" to "sunset", "bosque" to "forest",
+            "ciudad futurista" to "futuristic cyberpunk city", "montaña" to "mountain",
+            "playa" to "beach", "cielo estrellado" to "starry night sky", "galaxia" to "galaxy"
+        )
+        var translated = prompt
+        for ((es, en) in translations) {
+            translated = translated.replace(es, en, ignoreCase = true)
+        }
+        val lower = translated.lowercase()
+        val hasLighting = lower.contains("lighting") || lower.contains("light") || lower.contains("cinematic")
+        val hasQuality = lower.contains("8k") || lower.contains("wallpaper") || lower.contains("photorealistic") || lower.contains("detailed")
+        return buildString {
+            append(translated.trim())
+            if (!hasLighting) append(", cinematic lighting")
+            if (!hasQuality) append(", highly detailed, 8k wallpaper, sharp focus")
+        }
+    }
+
     private suspend fun generateImageDirect(imagePrompt: String): String {
         appendTranscriptMessage(TranscriptRole.USER, "/image $imagePrompt")
         val assistantMsgId = appendTranscriptMessage(
@@ -1059,17 +1129,23 @@ class InferenceService : Service() {
                 }
             }
 
+            val parsedArgs = parseImageCommandArgs(imagePrompt)
+            val promptToUse = enhanceImagePrompt(parsedArgs.cleanPrompt, parsedArgs.skipEnhancer)
+            Log.i(TAG, "Generating image with prompt: '$promptToUse', steps=${parsedArgs.steps}, seed=${parsedArgs.seed}")
+
             val result = diffusionManager.generateImage(
-                prompt = imagePrompt,
+                prompt = promptToUse,
+                negativePrompt = "",
                 width = 512,
                 height = 512,
-                steps = 4,
+                steps = parsedArgs.steps,
                 cfgScale = 1.0f,
+                seed = parsedArgs.seed,
             )
 
             return result.fold(
-                onSuccess = { file ->
-                    val successMsg = "🎨 Imagen generada con Stable Diffusion:\n\n![${imagePrompt.take(50)}](file://${file.absolutePath})\n\n*Guardada en ${file.name}*"
+                onSuccess = { output ->
+                    val successMsg = "🎨 **Imagen generada con Stable Diffusion:**\n\n![${parsedArgs.cleanPrompt}](file://${output.file.absolutePath})\n\n⚡ ${"%.2f".format(output.generationTimeSec)}s • ${output.steps} paso${if (output.steps > 1) "s" else ""} (SDXS-512) • Seed: `${output.seed}`\n*Guardada en ${output.file.name}*"
                     updateTranscriptMessage(assistantMsgId, successMsg)
                     publishUiEvent("Imagen generada correctamente")
                     successMsg

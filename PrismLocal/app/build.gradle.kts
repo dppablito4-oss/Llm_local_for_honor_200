@@ -66,24 +66,14 @@ val vulkanEnabled = signingValue("LLMHOST_ENABLE_VULKAN")
     // vkCmdBindPipeline during real inference, while the optimized CPU path is
     // both stable and faster for the small models supported by this app.
     ?: false
-val openClRequested = signingValue("LLMHOST_ENABLE_OPENCL")
+val openclEnabled = signingValue("LLMHOST_ENABLE_OPENCL")
     ?.let { value ->
         value.equals("true", ignoreCase = true) ||
             value.equals("on", ignoreCase = true) ||
             value.equals("yes", ignoreCase = true) ||
             value == "1"
     }
-    ?: false
-val openClIncludeDir = signingValue("LLMHOST_OPENCL_INCLUDE_DIR")
-val openClLibrary = signingValue("LLMHOST_OPENCL_LIBRARY")
-val openClAvailable = openClRequested && openClIncludeDir != null && openClLibrary != null
-val openClCmakeArgs = buildList {
-    add("-DLLMHOST_ENABLE_OPENCL=${if (openClAvailable) "ON" else "OFF"}")
-    if (openClAvailable) {
-        add("-DOpenCL_INCLUDE_DIR=$openClIncludeDir")
-        add("-DOpenCL_LIBRARY=$openClLibrary")
-    }
-}
+    ?: true
 
 android {
     namespace = "com.prismai.llmhost"
@@ -108,7 +98,8 @@ android {
                     "-DANDROID_PLATFORM=android-29",
                     "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
                     "-DLLMHOST_ENABLE_KLEIDIAI=${if (kleidiAiEnabled) "ON" else "OFF"}",
-                    "-DLLMHOST_ENABLE_VULKAN=${if (vulkanEnabled) "ON" else "OFF"}"
+                    "-DLLMHOST_ENABLE_VULKAN=${if (vulkanEnabled) "ON" else "OFF"}",
+                    "-DLLMHOST_ENABLE_OPENCL=${if (openclEnabled) "ON" else "OFF"}"
                 )
             }
         }
@@ -266,14 +257,15 @@ android {
             buildConfigField(
                 "String",
                 "LLMHOST_RUNTIME_BACKEND",
-                "\"${if (openClAvailable) "OpenCL-Adreno" else "CPU-KleidiAI"}\"",
+                "\"${if (openclEnabled) "OpenCL-Adreno" else "CPU-KleidiAI"}\"",
             )
             externalNativeBuild {
                 cmake {
                     arguments += listOf(
                         "-DLLMHOST_DEBUG_HOOKS=OFF",
                         "-DLLMHOST_ENABLE_KLEIDIAI=ON",
-                    ) + openClCmakeArgs
+                        "-DLLMHOST_ENABLE_OPENCL=${if (openclEnabled) "ON" else "OFF"}",
+                    )
                 }
             }
         }

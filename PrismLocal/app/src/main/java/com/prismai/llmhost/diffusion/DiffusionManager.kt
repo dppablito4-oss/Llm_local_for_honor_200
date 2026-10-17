@@ -6,6 +6,13 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
+data class ImageGenerationOutput(
+    val file: File,
+    val generationTimeSec: Float,
+    val steps: Int,
+    val seed: Long,
+)
+
 class DiffusionManager(private val context: Context) {
 
     private val mutex = Mutex()
@@ -18,10 +25,29 @@ class DiffusionManager(private val context: Context) {
         }
     }
 
+    fun resolveTaesdIfPresent(modelPath: String): String {
+        val modelFile = File(modelPath)
+        val parent = modelFile.parentFile ?: return ""
+        val candidates = listOf(
+            "taesd_decoder.safetensors",
+            "taesd_decoder.gguf",
+            "taesd.safetensors",
+            "taesd.pth",
+            "taesd.gguf"
+        )
+        for (candidate in candidates) {
+            val file = File(parent, candidate)
+            if (file.exists() && file.length() > 0) {
+                return file.absolutePath
+            }
+        }
+        return ""
+    }
+
     suspend fun loadModel(
         modelPath: String,
         vaePath: String = "",
-        taesdPath: String = "",
+        taesdPath: String = resolveTaesdIfPresent(modelPath),
         threads: Int = 4,
         onGpu: Boolean = true,
     ): Boolean = mutex.withLock {
@@ -45,13 +71,13 @@ class DiffusionManager(private val context: Context) {
 
     suspend fun generateImage(
         prompt: String,
-        negativePrompt: String = "blurry, bad quality, distorted",
+        negativePrompt: String = "",
         width: Int = 512,
         height: Int = 512,
-        steps: Int = 4,
+        steps: Int = 1,
         cfgScale: Float = 1.0f,
         seed: Long = System.currentTimeMillis(),
-    ): Result<File> = mutex.withLock {
+    ): Result<ImageGenerationOutput> = mutex.withLock {
         val currentBridge = bridge
         if (currentBridge == null || !currentBridge.isLoaded()) {
             return Result.failure(IllegalStateException("El modelo de difusión no está cargado"))
@@ -70,11 +96,18 @@ class DiffusionManager(private val context: Context) {
             seed = seed,
         )
 
+        val output = ImageGenerationOutput(
+            file = outputFile,
+            generationTimeSec = result.generationTimeSec,
+            steps = steps,
+            seed = seed,
+        )
+
         if (result.success && outputFile.exists() && outputFile.length() > 0) {
-            Result.success(outputFile)
+            Result.success(output)
         } else if (result.success && result.pngBytes != null && result.pngBytes.isNotEmpty()) {
             outputFile.writeBytes(result.pngBytes)
-            Result.success(outputFile)
+            Result.success(output)
         } else {
             Result.failure(RuntimeException(result.errorMessage.ifEmpty { "Error desconocido generando imagen" }))
         }

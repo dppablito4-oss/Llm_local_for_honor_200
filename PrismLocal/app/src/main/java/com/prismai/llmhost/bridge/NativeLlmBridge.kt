@@ -11,6 +11,7 @@ import androidx.annotation.VisibleForTesting
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.flow.Flow
@@ -65,6 +66,7 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
 
     @Volatile
     private var isDestroyed = false
+    @Volatile
     private var nativeHandle: Long = handle
 
     private external fun nativeDestroyEngine(handle: Long)
@@ -230,8 +232,9 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
     }
 
     suspend fun setMemoryPressure(level: Int) {
-        // Lock-free: C++ only writes an atomic (memory_pressure_level.store).
-        // The volatile isDestroyed check + C++ nullptr guard make this safe without a mutex.
+        // Do not wait for modelMutex to cancel decode. JNI acquires a shared
+        // engine lease by handle ID, so concurrent destruction cannot free it
+        // during this call. A retired handle is rejected by the native registry.
         if (!isDestroyed) {
             nativeSetMemoryPressure(nativeHandle, level)
         }
@@ -284,25 +287,11 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
         }
     }
 
-    /**
-     * Backpressure-aware emission. Silently dropped chunks previously corrupted
-     * transcripts and could lose the terminal event entirely, degrading real
-     * ERROR/CANCELLED outcomes into the EOF heuristic. Terminal chunks retry
-     * until delivered; data chunks cap retries at ~100 ms, then drop with a
-     * logged warning rather than stalling the drain loop forever.
-     */
+    // Tokens have already left the native ring: dropping here loses transcript
+    // data permanently. Suspend on the bounded channel; collector cancellation
+    // interrupts send and reaches the non-cancellable native cleanup below.
     private suspend fun ProducerScope<GenerationChunk>.emitChunk(chunk: GenerationChunk) {
-        var attempt = 0
-        while (true) {
-            if (trySend(chunk).isSuccess) return
-            if (!isActive) return
-            if (!chunk.isTerminal && attempt >= 50) {
-                Log.w(TAG, "chunk_dropped_backpressure genId=${chunk.generationId} tokens=${chunk.tokenCount}")
-                return
-            }
-            attempt++
-            delay(2)
-        }
+        send(chunk)
     }
 
     /**
@@ -414,9 +403,8 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
                     observedTerminal = true
                     // Finalize the decoder. Any buffered trailing bytes (e.g. a
                     // truncated final multi-byte sequence) are delivered *inside*
-                    // the terminal chunk: terminal chunks are retried until sent
-                    // (see emitChunk), so the remainder cannot be dropped under
-                    // backpressure the way a separate non-terminal chunk could.
+                    // the terminal chunk. Both data and terminal delivery wait
+                    // for the consumer without dropping already-drained bytes.
                     val trailingText = utf8.flush()
                     emitChunk(
                         GenerationChunk(
@@ -446,12 +434,16 @@ class NativeLlmBridge private constructor(handle: Long, private val instanceId: 
                 }
             }
         } finally {
-            genMutex.withLock {
-                if (!isDestroyed) {
-                    if (!observedTerminal) {
-                        nativeCancelGeneration(nativeHandle, genId)
+            // A cancelled collector may encounter a busy genMutex. Cleanup must
+            // still acquire it, stop the worker and acknowledge its ring state.
+            withContext(NonCancellable) {
+                genMutex.withLock {
+                    if (!isDestroyed) {
+                        if (!observedTerminal) {
+                            nativeCancelGeneration(nativeHandle, genId)
+                        }
+                        nativeAckEof(nativeHandle, genId)
                     }
-                    nativeAckEof(nativeHandle, genId)
                 }
             }
             if (jniTimingsCount > 0) {

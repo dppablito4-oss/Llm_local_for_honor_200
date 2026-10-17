@@ -1,0 +1,96 @@
+name: Android CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/*
+      - fix/*
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: PrismLocal
+
+jobs:
+  unit-tests:
+    name: Unit Tests & Golden Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code with Submodules
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: 'PrismLocal/**/*.gradle*'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests (Dev & Play Debug)
+        run: ./gradlew :app:testDevDebugUnitTest :app:testPlayDebugUnitTest :app:lintDevDebug :app:lintPlayDebug --no-daemon --max-workers=2 --stacktrace
+
+      - name: Portable C++ tests with sanitizers
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake -S app/src/test/cpp -B build/native-tests -DCMAKE_BUILD_TYPE=Debug -DPRISM_ENABLE_SANITIZERS=ON
+          cmake --build build/native-tests --parallel 2
+          ctest --test-dir build/native-tests --output-on-failure
+
+  native-builds:
+    # CPU builds cover RelWithDebInfo and R8. Vulkan remains an explicit opt-in;
+    # this job does not claim GPU runtime or shader-tool coverage.
+    name: Native Builds (benchmark & release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    needs: unit-tests
+    steps:
+      - name: Checkout Code with Submodules
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: 'PrismLocal/**/*.gradle*'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Install pinned Android SDK tools
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Assemble DevDebug and DevBenchmark
+        run: |
+          ./gradlew :app:assembleDevDebug --no-daemon --max-workers=2 --stacktrace
+          ./gradlew :app:assembleDevBenchmark --no-daemon --max-workers=2 --stacktrace
+
+      - name: Assemble PlayRelease (unsigned, CI auth placeholder)
+        env:
+          LLMHOST_SUPABASE_ANON_KEY: "ci-public-build-placeholder"
+        run: ./gradlew :app:assemblePlayRelease --no-daemon --max-workers=2 --stacktrace
+
+      - name: Verify minified JNI contracts and APK alignment
+        run: |
+          python3 scripts/check-apk-jni.py app/build/outputs/apk/dev/benchmark/app-dev-benchmark.apk app/build/outputs/apk/play/release/app-play-release-unsigned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/dev/debug/app-dev-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/dev/benchmark/app-dev-benchmark.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/play/release/app-play-release-unsigned.apk

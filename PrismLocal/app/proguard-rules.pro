@@ -23,6 +23,12 @@
 -keep class com.prismai.llmhost.bridge.NativeLlmBridge { *; }
 -keep class com.prismai.llmhost.bridge.NativeDrainResult { *; }
 
+# diffusion_jni.cpp constructs this carrier with FindClass/GetMethodID/NewObject.
+# Native return-type rules preserve the class name, but do not keep its constructor
+# or fields alive. Keep both the bridge and carrier, as for the LLM JNI contract.
+-keep class com.prismai.llmhost.diffusion.NativeDiffusionBridge { *; }
+-keep class com.prismai.llmhost.diffusion.DiffusionNativeResult { *; }
+
 # Keep data classes used with JSON (chat transcripts, benchmarks)
 -keepclassmembers class com.prismai.llmhost.TranscriptMessage { *; }
 -keepclassmembers class com.prismai.llmhost.BenchmarkRun { *; }

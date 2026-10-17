@@ -496,7 +496,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                                false,
                                                                clip_skip,
                                                                false);
-                GGML_ASSERT(!chunk_hidden_states.empty());
+                // Backend evaluation may be cancelled; propagate an empty
+                // condition to the pipeline instead of aborting the process.
+                if (chunk_hidden_states.empty()) return {};
                 if (sd_version_is_sdxl(version)) {
                     auto chunk_hidden_states2 = text_model2->compute(n_threads,
                                                                      input_ids2,
@@ -506,7 +508,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                                      false,
                                                                      clip_skip,
                                                                      false);
-                    GGML_ASSERT(!chunk_hidden_states2.empty());
+                    if (chunk_hidden_states2.empty()) return {};
                     chunk_hidden_states = sd::ops::concat(chunk_hidden_states, chunk_hidden_states2, 0);
 
                     if (chunk_idx == 0) {
@@ -518,7 +520,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                       true,
                                                       clip_skip,
                                                       false);
-                        GGML_ASSERT(!pooled.empty());
+                        if (pooled.empty()) return {};
                     }
                 }
                 int64_t t1 = ggml_time_ms();
@@ -541,7 +543,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         if (sd_version_is_sdxl(version)) {
             int out_dim         = 256;
             int adm_in_channels = 2816;
-            GGML_ASSERT(!pooled.empty());
+            if (pooled.empty()) return {};
             vec = sd::Tensor<float>({adm_in_channels});
             vec.fill_(0.0f);
             size_t offset = 0;

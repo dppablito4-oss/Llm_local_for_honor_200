@@ -13,7 +13,10 @@ class NativeDiffusionBridge : Closeable {
         }
     }
 
-    private var nativeHandle: Long = nativeCreate()
+    @Volatile
+    private var nativeHandle: Long = nativeCreate().also {
+        check(it != 0L) { "Failed to allocate native diffusion engine" }
+    }
     private val isDestroyed = AtomicBoolean(false)
 
     suspend fun loadModel(

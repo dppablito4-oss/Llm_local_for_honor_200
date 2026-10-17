@@ -36,8 +36,12 @@ static void custom_ggml_abort(const char* error) {
 namespace prism::diffusion {
 
 struct DiffusionEngine::Impl {
+    // Serialize operations that create/use/free sd_ctx. Cancellation only needs
+    // mu, so it can interrupt a generation while this lock is held.
+    std::mutex operation_mu;
     mutable std::mutex mu;
     sd_ctx_t* sd_ctx = nullptr;
+    std::atomic<bool> shutting_down{false};
     std::atomic<bool> cancel_requested{false};
     ProgressCallback active_progress_cb = nullptr;
     bool enable_vae_tiling = true;
@@ -45,9 +49,23 @@ struct DiffusionEngine::Impl {
 
 static void sd_progress_adapter(int step, int steps, float time, void* data) {
     auto* impl = static_cast<DiffusionEngine::Impl*>(data);
-    if (impl && impl->active_progress_cb) {
-        impl->active_progress_cb(step, steps, time);
+    ProgressCallback callback;
+    if (impl) {
+        std::lock_guard<std::mutex> lock(impl->mu);
+        callback = impl->active_progress_cb;
     }
+    if (callback) callback(step, steps, time);
+}
+
+// stable-diffusion's progress callback is process-global, not context-local.
+// Never let a second engine replace callback userdata while the first runs.
+static std::mutex g_generation_mu;
+
+static bool sd_cancel_eval(ggml_tensor*, bool ask, void* data) {
+    // Request a callback after each graph node, not only after a complete
+    // denoising step. Returning false on observation aborts backend compute.
+    if (ask) return true;
+    return !static_cast<std::atomic<bool>*>(data)->load(std::memory_order_acquire);
 }
 
 DiffusionEngine::DiffusionEngine() : impl_(std::make_unique<Impl>()) {
@@ -56,6 +74,7 @@ DiffusionEngine::DiffusionEngine() : impl_(std::make_unique<Impl>()) {
 }
 
 DiffusionEngine::~DiffusionEngine() {
+    shutdown();
     unload();
 }
 
@@ -67,11 +86,17 @@ bool DiffusionEngine::loadModel(
     bool on_gpu,
     bool enable_vae_tiling
 ) {
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    if (impl_->sd_ctx) {
-        free_sd_ctx(impl_->sd_ctx);
+    std::lock_guard<std::mutex> operation_lock(impl_->operation_mu);
+    std::lock_guard<std::mutex> generation_lock(g_generation_mu);
+    if (impl_->shutting_down.load()) return false;
+    sd_ctx_t* previous = nullptr;
+    bool accepted = false;
+    {
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        previous = impl_->sd_ctx;
         impl_->sd_ctx = nullptr;
     }
+    if (previous) free_sd_ctx(previous);
 
     impl_->enable_vae_tiling = enable_vae_tiling;
 
@@ -107,8 +132,19 @@ bool DiffusionEngine::loadModel(
         return false;
     }
 
-    impl_->sd_ctx = ctx;
-    impl_->cancel_requested.store(false);
+    {
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        // Shutdown may have been requested while new_sd_ctx was loading.
+        if (!impl_->shutting_down.load()) {
+            impl_->sd_ctx = ctx;
+            impl_->cancel_requested.store(false);
+            accepted = true;
+        }
+    }
+    if (!accepted) {
+        free_sd_ctx(ctx);
+        return false;
+    }
     LOGI("Diffusion model loaded successfully: %s", sd_get_model_version_name(ctx));
     return true;
 }
@@ -124,6 +160,7 @@ DiffusionResult DiffusionEngine::generate(
     int64_t seed,
     ProgressCallback progress_cb
 ) {
+    std::lock_guard<std::mutex> operation_lock(impl_->operation_mu);
     DiffusionResult result;
     auto start_time = std::chrono::steady_clock::now();
 
@@ -131,15 +168,27 @@ DiffusionResult DiffusionEngine::generate(
     {
         std::lock_guard<std::mutex> lock(impl_->mu);
         ctx = impl_->sd_ctx;
-        if (!ctx) {
-            result.error_message = "Diffusion model is not loaded";
+        if (!ctx || impl_->shutting_down.load()) {
+            result.error_message = impl_->shutting_down.load()
+                ? "Diffusion engine is shutting down" : "Diffusion model is not loaded";
             return result;
         }
         impl_->cancel_requested.store(false);
         impl_->active_progress_cb = progress_cb;
     }
 
+    std::lock_guard<std::mutex> generation_lock(g_generation_mu);
     sd_set_progress_callback(sd_progress_adapter, impl_.get());
+    sd_set_backend_eval_callback(sd_cancel_eval, &impl_->cancel_requested);
+    struct ProgressReset {
+        Impl* impl;
+        ~ProgressReset() {
+            sd_set_backend_eval_callback(nullptr, nullptr);
+            sd_set_progress_callback(nullptr, nullptr);
+            std::lock_guard<std::mutex> lock(impl->mu);
+            impl->active_progress_cb = nullptr;
+        }
+    } progress_reset{impl_.get()};
 
     sd_img_gen_params_t gen_params;
     sd_img_gen_params_init(&gen_params);
@@ -168,11 +217,6 @@ DiffusionResult DiffusionEngine::generate(
 
     auto end_time = std::chrono::steady_clock::now();
     result.generation_time_sec = std::chrono::duration<float>(end_time - start_time).count();
-
-    {
-        std::lock_guard<std::mutex> lock(impl_->mu);
-        impl_->active_progress_cb = nullptr;
-    }
 
     if (impl_->cancel_requested.load()) {
         result.error_message = "Generation cancelled by user";
@@ -254,12 +298,19 @@ void DiffusionEngine::cancel() {
 }
 
 void DiffusionEngine::unload() {
+    std::lock_guard<std::mutex> operation_lock(impl_->operation_mu);
+    std::lock_guard<std::mutex> generation_lock(g_generation_mu);
     std::lock_guard<std::mutex> lock(impl_->mu);
     if (impl_->sd_ctx) {
         LOGI("Unloading diffusion context");
         free_sd_ctx(impl_->sd_ctx);
         impl_->sd_ctx = nullptr;
     }
+}
+
+void DiffusionEngine::shutdown() {
+    impl_->shutting_down.store(true);
+    cancel();
 }
 
 bool DiffusionEngine::isLoaded() const {

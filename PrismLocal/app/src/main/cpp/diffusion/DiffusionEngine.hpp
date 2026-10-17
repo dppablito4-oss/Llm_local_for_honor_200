@@ -49,6 +49,7 @@ public:
     );
 
     void cancel();
+    void shutdown();
     void unload();
     bool isLoaded() const;
 

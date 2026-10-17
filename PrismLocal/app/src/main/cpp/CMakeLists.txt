@@ -4,6 +4,11 @@ project(llmhost)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Both engines share one GGML library. stable-diffusion requires longer tensor
+# names and defines GGML_MAX_NAME=160 in its own subtree; the same value must
+# apply to ggml, llama and JNI too, or ggml_tensor has incompatible layouts.
+add_compile_definitions(GGML_MAX_NAME=160)
+
 # 16 KB page-size alignment for Play (Android 15+). Hoist to shared linker flags so
 # libc++_shared and other shared deps inherit the same LOAD segment alignment.
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")

@@ -51,6 +51,11 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -139,7 +144,8 @@ class InferenceService : Service() {
     private lateinit var engine: NativeLlmBridge
     private lateinit var memoryGovernor: MemoryGovernor
     private lateinit var modelStorageManager: ModelStorageManager
-    private var generationJob: Job? = null
+    @Volatile private var generationJob: Job? = null
+    @Volatile private var activeImageSession: Long? = null
     private var rollingSummaryJob: Job? = null
     private var importJob: Job? = null
     private var downloadObserverJob: Job? = null
@@ -691,10 +697,12 @@ class InferenceService : Service() {
 
     fun cancelGeneration() {
         benchmarkRunner.cancelGeneration()
+        if (activeImageSession != null) diffusionManager.cancel()
         serviceScope.launch {
             cancelRollingSummaryAndJoin()
             operationMutex.withLock {
                 cancelAndJoinGenerationLocked("user cancel")
+                agentTrace.finalizeTrace(success = false, abortReason = "Cancelled by user")
             }
         }
     }
@@ -865,23 +873,10 @@ class InferenceService : Service() {
                          trimmed.startsWith("/image ", ignoreCase = true) ||
                          trimmed.startsWith("/imagine ", ignoreCase = true) ||
                          trimmed.startsWith("/sd ", ignoreCase = true)
-        if (isImageCmd) {
-            val imgPrompt = when {
-                isExactImageCmd -> ""
-                trimmed.startsWith("/image ", ignoreCase = true) -> trimmed.removePrefix("/image ").trim()
-                trimmed.startsWith("/imagine ", ignoreCase = true) -> trimmed.removePrefix("/imagine ").trim()
-                else -> trimmed.removePrefix("/sd ").trim()
-            }
-            if (imgPrompt.isBlank()) {
-                val hint = "🎨 Para generar una imagen con Stable Diffusion, incluye una descripción después de `/image`.\n\n*Ejemplo:* `/image un gatito astronauta flotando en el espacio exterior, hiperrealista, 8k`"
-                appendTranscriptMessage(TranscriptRole.USER, prompt)
-                appendTranscriptMessage(TranscriptRole.ASSISTANT, hint)
-                return hint
-            }
-            return generateImageDirect(imgPrompt)
-        }
+        val imagePrompt = if (isImageCmd) trimmed.substringAfter(' ', "").trim() else null
         cancelRollingSummaryAndJoin()
         var activeJob: Job? = null
+        var imageJob: Deferred<String>? = null
         operationMutex.withLock {
             if (initiatedByBackground &&
                 (_isGenerating.value || _pendingAgentToolAction.value != null)
@@ -893,9 +888,21 @@ class InferenceService : Service() {
                 reason = "new generation",
                 clearQueuedBenchmarks = !preserveBenchmarkQueue,
             )
-            generationOrchestrator.generate(prompt, benchmarkPreset)
+            agentTrace.finalizeTrace(success = false, abortReason = "Replaced by a new request")
+            if (imagePrompt != null) {
+                if (imagePrompt.isBlank()) {
+                    val hint = "🎨 Incluye una descripción después de `/image`. Ejemplo: `/image un gatito astronauta`."
+                    appendTranscriptMessage(TranscriptRole.USER, prompt)
+                    appendTranscriptMessage(TranscriptRole.ASSISTANT, hint)
+                    return hint
+                }
+                imageJob = startImageOperationLocked { generateImageDirect(imagePrompt) }
+            } else {
+                generationOrchestrator.generate(prompt, benchmarkPreset)
+            }
             activeJob = generationJob
         }
+        imageJob?.let { return it.await() }
         activeJob?.join()
         awaitGenerationSessionIdle()
         return streamState.snapshotText().takeIf { it.isNotBlank() } ?: "Background task completed"
@@ -920,9 +927,11 @@ class InferenceService : Service() {
     }
 
     suspend fun cancelGenerationAndJoin(reason: String = "user cancellation") {
+        if (activeImageSession != null) diffusionManager.cancel()
         cancelRollingSummaryAndJoin()
         operationMutex.withLock {
             cancelAndJoinGenerationLocked(reason)
+            agentTrace.finalizeTrace(success = false, abortReason = reason)
         }
     }
 
@@ -1087,15 +1096,50 @@ class InferenceService : Service() {
         }
     }
 
+    // Called only while operationMutex is held; heavy work runs in the stored
+    // child job, outside that mutex, so Stop and replacement requests can join it.
+    private fun <T> startImageOperationLocked(block: suspend () -> T): Deferred<T> {
+        val session = ++generationSession
+        activeImageSession = session
+        _isGenerating.value = true
+        _runtimeStatus.value = RuntimeStatus.GENERATING
+        _generationPerformance.value = null
+        startGenerationForeground()
+        val job = serviceScope.async(start = CoroutineStart.LAZY) {
+            try {
+                block()
+            } finally {
+                if (generationSession == session) {
+                    activeImageSession = null
+                    generationJob = null
+                    _isGenerating.value = false
+                    _runtimeStatus.value = RuntimeStatus.IDLE
+                    stopGenerationForeground()
+                }
+            }
+        }
+        generationJob = job
+        job.start()
+        return job
+    }
+
+    private suspend fun generateImageToolCoordinated(call: AgentToolCall): AgentToolResult {
+        cancelRollingSummaryAndJoin()
+        val job = operationMutex.withLock {
+            cancelAndJoinGenerationLocked("image tool")
+            startImageOperationLocked { diffusionTools.generateImage(call) }
+        }
+        return job.await()
+    }
+
     private suspend fun generateImageDirect(imagePrompt: String): String {
         appendTranscriptMessage(TranscriptRole.USER, "/image $imagePrompt")
         val assistantMsgId = appendTranscriptMessage(
             TranscriptRole.ASSISTANT,
             "🎨 Generando imagen local con Stable Diffusion: \"$imagePrompt\"..."
         )
-        _isGenerating.value = true
-        startGenerationForeground()
         try {
+            currentCoroutineContext().ensureActive()
             if (!diffusionManager.isLoaded()) {
                 val installed = modelStorageManager.listInstalledModels()
                 val diffModelId = installed.firstOrNull { id ->
@@ -1130,6 +1174,7 @@ class InferenceService : Service() {
             }
 
             val parsedArgs = parseImageCommandArgs(imagePrompt)
+            currentCoroutineContext().ensureActive()
             val promptToUse = enhanceImagePrompt(parsedArgs.cleanPrompt, parsedArgs.skipEnhancer)
             Log.i(TAG, "Generating image with prompt: '$promptToUse', steps=${parsedArgs.steps}, seed=${parsedArgs.seed}")
 
@@ -1157,9 +1202,13 @@ class InferenceService : Service() {
                     failureMsg
                 }
             )
-        } finally {
-            _isGenerating.value = false
-            stopGenerationForeground()
+        } catch (cancelled: CancellationException) {
+            updateTranscriptMessage(assistantMsgId, "🎨 Generación de imagen cancelada.", persistImmediately = true)
+            throw cancelled
+        } catch (error: Exception) {
+            val message = "❌ Error al generar la imagen: ${error.message ?: "Fallo desconocido"}"
+            updateTranscriptMessage(assistantMsgId, message, persistImmediately = true)
+            return message
         }
     }
 
@@ -1252,7 +1301,7 @@ class InferenceService : Service() {
             // ── Web search ───────────────────────────────────────────────────
             "web_search" -> webSearchTools.webSearch(call)
             // ── Image generation (Stable Diffusion) ───────────────────────────
-            "generate_image" -> diffusionTools.generateImage(call)
+            "generate_image" -> generateImageToolCoordinated(call)
             else -> AgentToolResult(call, success = false, summary = "Unknown tool: ${call.name}")
         }
 
@@ -1559,13 +1608,25 @@ class InferenceService : Service() {
         clearQueuedBenchmarks: Boolean = true,
     ) {
         val job = generationJob
+        val cancellingImage = activeImageSession != null
         generationSession++
         generationJob = null
         if (job != null) {
             Log.d(TAG, "cancelAndJoinGeneration reason=$reason")
-            job.cancelAndJoin()
-            benchmarkStore.recordInterrupted(reason, streamState.snapshotText())
+            if (cancellingImage) {
+                job.cancel()
+                // Cover cancellation during IO dispatch/model load as well as
+                // active sampling. A delayed native entry must not reset Stop.
+                while (!job.isCompleted) {
+                    diffusionManager.cancel()
+                    withTimeoutOrNull(25L) { job.join() }
+                }
+            } else {
+                job.cancelAndJoin()
+                benchmarkStore.recordInterrupted(reason, streamState.snapshotText())
+            }
         }
+        activeImageSession = null
         stopGenerationForeground()
         _isGenerating.value = false
         generationMetrics.clear()
@@ -1666,6 +1727,7 @@ class InferenceService : Service() {
         importJob = null
         rollingSummaryJob?.cancel()
         rollingSummaryJob = null
+        if (::diffusionManager.isInitialized) diffusionManager.cancel()
 
         // Run cancellation + native teardown off the main thread and wait only a
         // bounded budget for it. If the budget expires the job is deliberately
@@ -1676,8 +1738,15 @@ class InferenceService : Service() {
         if (teardownStarted.compareAndSet(false, true)) {
             val teardownJob = teardownScope.launch {
                 operationMutex.withLock {
-                    cancelAndJoinGenerationLocked("service destroy")
-                    engine.destroySafely()
+                    try {
+                        cancelAndJoinGenerationLocked("service destroy")
+                    } finally {
+                        try {
+                            if (::diffusionManager.isInitialized) diffusionManager.shutdown()
+                        } finally {
+                            engine.destroySafely()
+                        }
+                    }
                 }
             }
             val finishedInTime = runBlocking {
@@ -1698,7 +1767,6 @@ class InferenceService : Service() {
         if (::backgroundAgentManager.isInitialized) backgroundAgentManager.shutdown()
         serviceScope.cancel()
         if (::voiceIoManager.isInitialized) voiceIoManager.shutdown()
-        if (::diffusionManager.isInitialized) diffusionManager.unload()
         super.onDestroy()
     }
 

@@ -1,10 +1,14 @@
 package com.prismai.llmhost.diffusion
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ImageGenerationOutput(
     val file: File,
@@ -16,7 +20,8 @@ data class ImageGenerationOutput(
 class DiffusionManager(private val context: Context) {
 
     private val mutex = Mutex()
-    private var bridge: NativeDiffusionBridge? = null
+    @Volatile private var bridge: NativeDiffusionBridge? = null
+    private val closing = AtomicBoolean(false)
     private var currentModelPath: String? = null
 
     val imagesDir: File by lazy {
@@ -51,6 +56,7 @@ class DiffusionManager(private val context: Context) {
         threads: Int = 4,
         onGpu: Boolean = true,
     ): Boolean = mutex.withLock {
+        if (closing.get()) return false
         if (bridge == null) {
             bridge = NativeDiffusionBridge()
         }
@@ -78,6 +84,9 @@ class DiffusionManager(private val context: Context) {
         cfgScale: Float = 1.0f,
         seed: Long = System.currentTimeMillis(),
     ): Result<ImageGenerationOutput> = mutex.withLock {
+        if (closing.get()) {
+            return Result.failure(IllegalStateException("El motor de imágenes se está cerrando"))
+        }
         val currentBridge = bridge
         if (currentBridge == null || !currentBridge.isLoaded()) {
             return Result.failure(IllegalStateException("El modelo de difusión no está cargado"))
@@ -119,9 +128,21 @@ class DiffusionManager(private val context: Context) {
 
     fun isLoaded(): Boolean = bridge?.isLoaded() == true
 
-    fun unload() {
-        bridge?.close()
-        bridge = null
-        currentModelPath = null
+    suspend fun unload() {
+        cancel()
+        // Coroutine cancellation must not abandon a native free. Waiting for
+        // generate/load and freeing the context are always off the main thread.
+        withContext(Dispatchers.IO + NonCancellable) {
+            mutex.withLock {
+                bridge?.close()
+                bridge = null
+                currentModelPath = null
+            }
+        }
+    }
+
+    suspend fun shutdown() {
+        closing.set(true)
+        unload()
     }
 }

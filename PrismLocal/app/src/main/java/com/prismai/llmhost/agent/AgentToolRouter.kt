@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -246,8 +247,17 @@ class AgentToolRouter(
             AgentToolRisk.SAFE -> {
                 scope.launch {
                     val stepStart = SystemClock.elapsedRealtime()
+                    val toolChatId = uiState.currentChatId.value
                     val result = try {
                         executeTool(validatedCall, false)
+                    } catch (cancelled: CancellationException) {
+                        if (uiState.currentChatId.value == toolChatId) {
+                            appendToolResult(AgentToolResult(
+                                call = validatedCall, success = false,
+                                summary = "Tool cancelled", errorCode = AgentToolErrorCode.FAILED,
+                            ))
+                        }
+                        throw cancelled
                     } catch (e: Exception) {
                         AgentToolResult(
                             call = validatedCall,

@@ -1,9 +1,13 @@
 #include <jni.h>
 #include <string>
+#include <exception>
 #include "DiffusionEngine.hpp"
+#include "runtime/NativeHandleRegistry.hpp"
 
 using prism::diffusion::DiffusionEngine;
 using prism::diffusion::DiffusionResult;
+
+static llmhost::NativeHandleRegistry<DiffusionEngine> g_diffusion_engines;
 
 static std::string jstringToString(JNIEnv* env, jstring jstr) {
     if (!jstr) return "";
@@ -34,8 +38,11 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeCreate(
     JNIEnv* /*env*/,
     jobject /*thiz*/
 ) {
-    auto* engine = new (std::nothrow) DiffusionEngine();
-    return reinterpret_cast<jlong>(engine);
+    try {
+        return g_diffusion_engines.insert(std::make_shared<DiffusionEngine>());
+    } catch (const std::exception&) {
+        return 0;
+    }
 }
 
 JNIEXPORT void JNICALL
@@ -44,8 +51,8 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeDestroy(
     jobject /*thiz*/,
     jlong handle
 ) {
-    auto* engine = reinterpret_cast<DiffusionEngine*>(handle);
-    delete engine;
+    auto engine = g_diffusion_engines.retire(handle);
+    if (engine) engine->shutdown();
 }
 
 JNIEXPORT jboolean JNICALL
@@ -60,7 +67,7 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeLoadModel(
     jboolean on_gpu,
     jboolean vae_tiling
 ) {
-    auto* engine = reinterpret_cast<DiffusionEngine*>(handle);
+    auto engine = g_diffusion_engines.acquire(handle);
     if (!engine) return JNI_FALSE;
 
     const std::string m_path = jstringToString(env, model_path);
@@ -85,14 +92,18 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeGenerate(
     jfloat cfg_scale,
     jlong seed
 ) {
-    auto* engine = reinterpret_cast<DiffusionEngine*>(handle);
-    if (!engine) return nullptr;
+    auto engine = g_diffusion_engines.acquire(handle);
 
     const std::string p = jstringToString(env, prompt);
     const std::string np = jstringToString(env, negative_prompt);
     const std::string out_path = jstringToString(env, output_file_path);
 
-    DiffusionResult res = engine->generate(p, np, out_path, width, height, steps, cfg_scale, seed);
+    DiffusionResult res;
+    if (engine) {
+        res = engine->generate(p, np, out_path, width, height, steps, cfg_scale, seed);
+    } else {
+        res.error_message = "Diffusion bridge is closed or invalid";
+    }
 
     jclass result_class = env->FindClass("com/prismai/llmhost/diffusion/DiffusionNativeResult");
     if (!result_class) return nullptr;
@@ -135,7 +146,7 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeCancel(
     jobject /*thiz*/,
     jlong handle
 ) {
-    auto* engine = reinterpret_cast<DiffusionEngine*>(handle);
+    auto engine = g_diffusion_engines.acquire(handle);
     if (engine) engine->cancel();
 }
 
@@ -145,7 +156,7 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeIsLoaded(
     jobject /*thiz*/,
     jlong handle
 ) {
-    auto* engine = reinterpret_cast<DiffusionEngine*>(handle);
+    auto engine = g_diffusion_engines.acquire(handle);
     return (engine && engine->isLoaded()) ? JNI_TRUE : JNI_FALSE;
 }
 

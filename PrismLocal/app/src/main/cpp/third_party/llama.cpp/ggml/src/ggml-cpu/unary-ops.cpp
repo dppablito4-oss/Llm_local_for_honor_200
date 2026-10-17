@@ -111,12 +111,9 @@ template <float (*op)(float), typename src0_t, typename dst_t>
 static void apply_unary_op(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
-    GGML_ASSERT(ggml_is_contiguous_rows(src0) && ggml_is_contiguous_rows(dst) && ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     GGML_TENSOR_UNARY_OP_LOCALS
-
-    GGML_ASSERT( nb0 == sizeof(dst_t));
-    GGML_ASSERT(nb00 == sizeof(src0_t));
 
     const auto [ir0, ir1] = get_thread_range(params, src0);
 
@@ -128,50 +125,17 @@ static void apply_unary_op(const ggml_compute_params * params, ggml_tensor * dst
         dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
         const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
 
-        vec_unary_op<op>(ne0, dst_ptr, src0_ptr);
-    }
-}
-
-// TODO: Use the 'traits' lookup table (for type conversion fns), instead of a mass of 'if' conditions with long templates
-template <float (*op)(float)>
-static void unary_op(const ggml_compute_params * params, ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];
-
-    /*  */ if (src0->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
-        apply_unary_op<op, float, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) { // all f16
-        apply_unary_op<op, ggml_fp16_t, ggml_fp16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) { // all bf16
-        apply_unary_op<op, ggml_bf16_t, ggml_bf16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
-        apply_unary_op<op, ggml_bf16_t, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F32) {
-        apply_unary_op<op, ggml_fp16_t, float>(params, dst);
-    } else {
-        fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s\n", __func__,
-            ggml_type_name(dst->type), ggml_type_name(src0->type));
-        GGML_ABORT("fatal error");
-    }
-}
-
-template <float (*op)(float, ggml_tensor *)>
-static void unary_op_params(const ggml_compute_params * params, ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];
-
-    /*  */ if (src0->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
-        apply_unary_op<op, float, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) { // all f16
-        apply_unary_op<op, ggml_fp16_t, ggml_fp16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) { // all bf16
-        apply_unary_op<op, ggml_bf16_t, ggml_bf16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
-        apply_unary_op<op, ggml_bf16_t, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F32) {
-        apply_unary_op<op, ggml_fp16_t, float>(params, dst);
-    } else {
-        fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s\n", __func__,
-            ggml_type_name(dst->type), ggml_type_name(src0->type));
-        GGML_ABORT("fatal error");
+        if (nb0 == sizeof(dst_t) && nb00 == sizeof(src0_t)) {
+            vec_unary_op<op>(ne0, dst_ptr, src0_ptr);
+        } else {
+            constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
+            constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
+            for (int64_t i00 = 0; i00 < ne0; ++i00) {
+                const src0_t * s0 = (const src0_t *)((const char *)src0_ptr + i00*nb00);
+                dst_t * d = (dst_t *)((char *)dst_ptr + i00*nb0);
+                *d = f32_to_dst(op(src0_to_f32(*s0)));
+            }
+        }
     }
 }
 
@@ -191,12 +155,9 @@ template <typename Op, typename src0_t, typename dst_t>
 static void apply_unary_op_functor(const ggml_compute_params * params, ggml_tensor * dst, Op op) {
     const ggml_tensor * src0 = dst->src[0];
 
-    GGML_ASSERT(ggml_is_contiguous_1(src0) && ggml_is_contiguous_1(dst) && ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     GGML_TENSOR_UNARY_OP_LOCALS
-
-    GGML_ASSERT( nb0 == sizeof(dst_t));
-    GGML_ASSERT(nb00 == sizeof(src0_t));
 
     const auto [ir0, ir1] = get_thread_range(params, src0);
 
@@ -208,7 +169,17 @@ static void apply_unary_op_functor(const ggml_compute_params * params, ggml_tens
         dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
         const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
 
-        vec_unary_op_functor(ne0, dst_ptr, src0_ptr, op);
+        if (nb0 == sizeof(dst_t) && nb00 == sizeof(src0_t)) {
+            vec_unary_op_functor(ne0, dst_ptr, src0_ptr, op);
+        } else {
+            constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
+            constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
+            for (int64_t i00 = 0; i00 < ne0; ++i00) {
+                const src0_t * s0 = (const src0_t *)((const char *)src0_ptr + i00*nb00);
+                dst_t * d = (dst_t *)((char *)dst_ptr + i00*nb0);
+                *d = f32_to_dst(op(src0_to_f32(*s0)));
+            }
+        }
     }
 }
 
@@ -217,21 +188,57 @@ template <typename Op>
 static void unary_op_functor(const ggml_compute_params * params, ggml_tensor * dst, Op op) {
     const ggml_tensor * src0 = dst->src[0];
 
-    /*  */ if (src0->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
-        apply_unary_op_functor<Op, float, float>(params, dst, op);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) { // all f16
-        apply_unary_op_functor<Op, ggml_fp16_t, ggml_fp16_t>(params, dst, op);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) { // all bf16
-        apply_unary_op_functor<Op, ggml_bf16_t, ggml_bf16_t>(params, dst, op);
-    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
-        apply_unary_op_functor<Op, ggml_bf16_t, float>(params, dst, op);
-    } else if (src0->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F32) {
-        apply_unary_op_functor<Op, ggml_fp16_t, float>(params, dst, op);
-    } else {
-        fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s\n", __func__,
-            ggml_type_name(dst->type), ggml_type_name(src0->type));
-        GGML_ABORT("fatal error");
+    auto dispatch_dst = [&](auto src0_tag) {
+        using S0 = decltype(src0_tag);
+        switch (dst->type) {
+            case GGML_TYPE_F32:  apply_unary_op_functor<Op, S0, float>(params, dst, op); break;
+            case GGML_TYPE_F16:  apply_unary_op_functor<Op, S0, ggml_fp16_t>(params, dst, op); break;
+            case GGML_TYPE_BF16: apply_unary_op_functor<Op, S0, ggml_bf16_t>(params, dst, op); break;
+            default:
+                GGML_ABORT("%s: unsupported dst type: %s (src0: %s)\n", __func__,
+                    ggml_type_name(dst->type), ggml_type_name(src0->type));
+        }
+    };
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:  dispatch_dst(float{}); break;
+        case GGML_TYPE_F16:  dispatch_dst(ggml_fp16_t{}); break;
+        case GGML_TYPE_BF16: dispatch_dst(ggml_bf16_t{}); break;
+        default:
+            GGML_ABORT("%s: unsupported src0 type: %s (dst: %s)\n", __func__,
+                ggml_type_name(src0->type), ggml_type_name(dst->type));
     }
+}
+
+template <float (*op)(float)>
+static void unary_op(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    auto dispatch_dst = [&](auto src0_tag) {
+        using S0 = decltype(src0_tag);
+        switch (dst->type) {
+            case GGML_TYPE_F32:  apply_unary_op<op, S0, float>(params, dst); break;
+            case GGML_TYPE_F16:  apply_unary_op<op, S0, ggml_fp16_t>(params, dst); break;
+            case GGML_TYPE_BF16: apply_unary_op<op, S0, ggml_bf16_t>(params, dst); break;
+            default:
+                GGML_ABORT("%s: unsupported dst type: %s (src0: %s)\n", __func__,
+                    ggml_type_name(dst->type), ggml_type_name(src0->type));
+        }
+    };
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:  dispatch_dst(float{}); break;
+        case GGML_TYPE_F16:  dispatch_dst(ggml_fp16_t{}); break;
+        case GGML_TYPE_BF16: dispatch_dst(ggml_bf16_t{}); break;
+        default:
+            GGML_ABORT("%s: unsupported src0 type: %s (dst: %s)\n", __func__,
+                ggml_type_name(src0->type), ggml_type_name(dst->type));
+    }
+}
+
+template <float (*op)(float, ggml_tensor *)>
+static void unary_op_params(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op_functor(params, dst, [dst](float x) { return op(x, dst); });
 }
 
 void ggml_compute_forward_abs(const ggml_compute_params * params, ggml_tensor * dst) {

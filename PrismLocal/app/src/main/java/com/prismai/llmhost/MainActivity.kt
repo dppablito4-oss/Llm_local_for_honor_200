@@ -108,9 +108,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePromptIntent(intent: Intent?) {
-        val prompt = intent?.getStringExtra("prompt")
+        var raw = intent?.getStringExtra("prompt") ?: return
+        if (raw.contains("%20")) {
+            raw = runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+        }
+        val prompt = raw.trim().removeSurrounding("\"").removeSurrounding("'").trim()
         Log.i(TAG, "handlePromptIntent received prompt=$prompt")
-        if (prompt.isNullOrBlank()) return
+        if (prompt.isBlank()) return
         lifecycleScope.launch(Dispatchers.Default) {
             while (service == null) {
                 kotlinx.coroutines.delay(100)

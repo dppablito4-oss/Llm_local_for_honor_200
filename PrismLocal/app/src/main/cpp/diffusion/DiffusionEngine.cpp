@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include "stable-diffusion.h"
+#include "ggml.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -15,6 +16,22 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static void custom_sd_log(sd_log_level_t level, const char* text, void* /*data*/) {
+    android_LogPriority prio = ANDROID_LOG_INFO;
+    switch (level) {
+        case SD_LOG_DEBUG: prio = ANDROID_LOG_DEBUG; break;
+        case SD_LOG_INFO:  prio = ANDROID_LOG_INFO; break;
+        case SD_LOG_WARN:  prio = ANDROID_LOG_WARN; break;
+        case SD_LOG_ERROR: prio = ANDROID_LOG_ERROR; break;
+        default:           prio = ANDROID_LOG_VERBOSE; break;
+    }
+    __android_log_print(prio, LOG_TAG, "%s", text);
+}
+
+static void custom_ggml_abort(const char* error) {
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "FATAL GGML_ABORT: %s", error);
+}
 
 namespace prism::diffusion {
 
@@ -33,7 +50,10 @@ static void sd_progress_adapter(int step, int steps, float time, void* data) {
     }
 }
 
-DiffusionEngine::DiffusionEngine() : impl_(std::make_unique<Impl>()) {}
+DiffusionEngine::DiffusionEngine() : impl_(std::make_unique<Impl>()) {
+    sd_set_log_callback(custom_sd_log, nullptr);
+    ggml_set_abort_callback(custom_ggml_abort);
+}
 
 DiffusionEngine::~DiffusionEngine() {
     unload();
@@ -77,9 +97,9 @@ bool DiffusionEngine::loadModel(
     params.rng_type = STD_DEFAULT_RNG;
     params.enable_mmap = true;
 
-    // Flash-attention on ARMv9 CPU; disable on mobile GPU where compute shaders may not support it
-    params.diffusion_flash_attn = !on_gpu;
-    params.flash_attn = !on_gpu;
+    // Disable forced flash-attention for guaranteed stability on mobile ARM CPU and OpenCL
+    params.diffusion_flash_attn = false;
+    params.flash_attn = false;
 
     sd_ctx_t* ctx = new_sd_ctx(&params);
     if (!ctx) {

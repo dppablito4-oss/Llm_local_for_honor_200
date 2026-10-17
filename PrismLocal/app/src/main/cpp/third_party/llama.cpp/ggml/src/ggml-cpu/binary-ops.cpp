@@ -55,9 +55,6 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    GGML_ASSERT( nb0 == sizeof(dst_t));
-    GGML_ASSERT(nb00 == sizeof(src0_t));
-
     const auto [ir0, ir1] = get_thread_range(params, src0);
     const bool is_src1_contiguous_rows = ggml_is_contiguous_rows(src1);
 
@@ -90,7 +87,7 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
         const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
         const src1_t * src1_ptr = (const src1_t *) ((const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
 
-        if (is_src1_contiguous_rows) {
+        if (is_src1_contiguous_rows && nb0 == sizeof(dst_t) && nb00 == sizeof(src0_t)) {
             // src1 is broadcastable across src0 and dst in i1, i2, i3
             const int64_t nr0 = ne00 / ne10;
 
@@ -105,8 +102,21 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
 #endif
                 vec_binary_op_contiguous<op>(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
             }
-        } else {
+        } else if (nb0 == sizeof(dst_t) && nb00 == sizeof(src0_t)) {
             vec_binary_op_non_contiguous<op>(ne0, ne10, nb10, dst_ptr, src0_ptr, src1_ptr);
+        } else {
+            // Fully generalized element-wise strided path for non-contiguous / transposed / sliced tensors
+            constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
+            constexpr auto src1_to_f32 = type_conversion_table<src1_t>::to_f32;
+            constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
+
+            for (int64_t i00 = 0; i00 < ne00; ++i00) {
+                const int64_t i10 = i00 % ne10;
+                const src0_t* s0 = (const src0_t*)((const char*)src0_ptr + i00 * nb00);
+                const src1_t* s1 = (const src1_t*)((const char*)src1_ptr + i10 * nb10);
+                dst_t* d         = (dst_t*)      ((char*)dst_ptr       + i00 * nb0);
+                *d = f32_to_dst(op(src0_to_f32(*s0), src1_to_f32(*s1)));
+            }
         }
     }
 }
@@ -117,23 +127,38 @@ static void binary_op(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    /*  */ if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
-        apply_binary_op<op, float, float, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) { // all f16
-        apply_binary_op<op, ggml_fp16_t, ggml_fp16_t, ggml_fp16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) { // all bf16
-        apply_binary_op<op, ggml_bf16_t, ggml_bf16_t, ggml_bf16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_BF16) {
-        apply_binary_op<op, ggml_bf16_t, float, ggml_bf16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) {
-        apply_binary_op<op, ggml_bf16_t, float, float>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F16) {
-        apply_binary_op<op, ggml_fp16_t, float, ggml_fp16_t>(params, dst);
-    } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) {
-        apply_binary_op<op, ggml_fp16_t, float, float>(params, dst);
-    } else {
-        GGML_ABORT("%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
-            ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
+    auto dispatch_dst = [&](auto src0_tag, auto src1_tag) {
+        using S0 = decltype(src0_tag);
+        using S1 = decltype(src1_tag);
+        switch (dst->type) {
+            case GGML_TYPE_F32:  apply_binary_op<op, S0, S1, float>(params, dst); break;
+            case GGML_TYPE_F16:  apply_binary_op<op, S0, S1, ggml_fp16_t>(params, dst); break;
+            case GGML_TYPE_BF16: apply_binary_op<op, S0, S1, ggml_bf16_t>(params, dst); break;
+            default:
+                GGML_ABORT("%s: unsupported dst type: %s (src0: %s, src1: %s)\n", __func__,
+                    ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
+        }
+    };
+
+    auto dispatch_src1 = [&](auto src0_tag) {
+        using S0 = decltype(src0_tag);
+        switch (src1->type) {
+            case GGML_TYPE_F32:  dispatch_dst(S0{}, float{}); break;
+            case GGML_TYPE_F16:  dispatch_dst(S0{}, ggml_fp16_t{}); break;
+            case GGML_TYPE_BF16: dispatch_dst(S0{}, ggml_bf16_t{}); break;
+            default:
+                GGML_ABORT("%s: unsupported src1 type: %s (dst: %s, src0: %s)\n", __func__,
+                    ggml_type_name(src1->type), ggml_type_name(dst->type), ggml_type_name(src0->type));
+        }
+    };
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:  dispatch_src1(float{}); break;
+        case GGML_TYPE_F16:  dispatch_src1(ggml_fp16_t{}); break;
+        case GGML_TYPE_BF16: dispatch_src1(ggml_bf16_t{}); break;
+        default:
+            GGML_ABORT("%s: unsupported src0 type: %s (dst: %s, src1: %s)\n", __func__,
+                ggml_type_name(src0->type), ggml_type_name(dst->type), ggml_type_name(src1->type));
     }
 }
 

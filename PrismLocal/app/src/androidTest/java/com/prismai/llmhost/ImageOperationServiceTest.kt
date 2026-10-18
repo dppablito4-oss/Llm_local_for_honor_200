@@ -40,6 +40,7 @@ class ImageOperationServiceTest {
         val context = instrumentation.targetContext
         val prefs = context.getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
         val originalModel = prefs.getString("active_model", null)
+        val originalImageModel = prefs.getString("active_diffusion_model", null)
         val connected = CompletableDeferred<InferenceService>()
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -65,7 +66,12 @@ class ImageOperationServiceTest {
                     (originalModel == null || service.currentModel.value == originalModel)
             }
             originalChat = service.currentChatId.value
+            // Model switching updates the current chat's model annotation.
+            // Reserve our own chat before selecting any temporary weights.
+            testChat = service.createChat()
+            assertTrue(testChat!!.isNotBlank() && testChat != originalChat)
             assertTrue("real SDXS must be installed", storage.listInstalledModels().any { it.contains("sdxs", true) })
+            prefs.edit().putString("active_diffusion_model", storage.listInstalledModels().first { it.contains("sdxs", true) }).commit()
             val imported = instrumentation.context.assets.open("smoke-model/tinyllama-v0.q8_0.gguf").use {
                 storage.importModelFromStream("stability-smoke-${UUID.randomUUID()}.gguf", 6750304, it)
             }
@@ -74,8 +80,6 @@ class ImageOperationServiceTest {
             assertTrue(service.switchModel(testModel!!))
             service.updateGenerationSettings(oldSettings.copy(maxTokens = 32, topK = 1, agentEnabled = false))
             waitUntil { service.runtimeStatus.value != RuntimeStatus.LOADING_MODEL }
-            testChat = service.createChat()
-            assertTrue(testChat!!.isNotBlank() && testChat != originalChat)
 
             val text = withTimeout(30_000) { service.generateSafelyAndAwait("Once upon a time") }
             assertTrue(text.isNotBlank())
@@ -155,6 +159,9 @@ class ImageOperationServiceTest {
             (managerField.get(service) as DiffusionManager).unload()
             service.updateGenerationSettings(oldSettings)
             if (originalModel != null) assertTrue(service.switchModel(originalModel))
+            prefs.edit().apply {
+                if (originalImageModel == null) remove("active_diffusion_model") else putString("active_diffusion_model", originalImageModel)
+            }.commit()
             if (originalChat != null) service.switchChat(originalChat!!)
             testChat?.let { service.deleteChat(it) }
             testChat?.let { id ->

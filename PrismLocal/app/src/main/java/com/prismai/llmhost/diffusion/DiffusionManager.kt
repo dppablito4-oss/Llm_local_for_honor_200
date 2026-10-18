@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import com.prismai.llmhost.storage.ModelStorageManager
+import com.prismai.llmhost.BuildConfig
 
 data class ImageGenerationOutput(
     val file: File,
@@ -23,6 +25,32 @@ class DiffusionManager(private val context: Context) {
     @Volatile private var bridge: NativeDiffusionBridge? = null
     private val closing = AtomicBoolean(false)
     private var currentModelPath: String? = null
+    @Volatile var currentProfile = ModelStorageManager.DiffusionProfile()
+        private set
+    @Volatile private var currentBackend = DiffusionBackend.CPU
+
+    fun requestedBackend(): DiffusionBackend {
+        if (BuildConfig.BUILD_TYPE != "adreno") return DiffusionBackend.CPU
+        val saved = context.getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
+            .getString("diffusion_backend", "AUTO")
+        return DiffusionBackend.entries.firstOrNull { it.name == saved } ?: DiffusionBackend.CPU
+    }
+
+    fun isLoadedForRequestedBackend(): Boolean = isLoaded() && currentBackend == requestedBackend()
+    fun backendInfo(): String = bridge?.backendInfo() ?: "{\"status\":\"BACKEND_NOT_VERIFIED\"}"
+
+    fun selectedModel(): ModelStorageManager.ActiveModelInfo? {
+        val storage = ModelStorageManager(context)
+        val id = context.getSharedPreferences("llm_host_prefs", Context.MODE_PRIVATE)
+            .getString("active_diffusion_model", null)
+        return id?.let { storage.activeModelInfo(it) }?.takeIf { it.kind == ModelStorageManager.ModelKind.IMAGE }
+            ?: storage.listInstalledModelInfos().firstOrNull { it.kind == ModelStorageManager.ModelKind.IMAGE }
+    }
+
+    suspend fun loadSelectedModel(): Boolean {
+        val model = selectedModel() ?: return false
+        return loadModel(model.file.absolutePath, profile = model.diffusionProfile, backend = requestedBackend(), hybrid = true)
+    }
 
     val imagesDir: File by lazy {
         File(context.filesDir, "generated_images").apply {
@@ -54,7 +82,10 @@ class DiffusionManager(private val context: Context) {
         vaePath: String = "",
         taesdPath: String = resolveTaesdIfPresent(modelPath),
         threads: Int = 4,
-        onGpu: Boolean = true,
+        onGpu: Boolean = false,
+        profile: ModelStorageManager.DiffusionProfile = ModelStorageManager.DiffusionProfile(),
+        backend: DiffusionBackend? = null,
+        hybrid: Boolean = false,
     ): Boolean = mutex.withLock {
         if (closing.get()) return false
         if (bridge == null) {
@@ -68,9 +99,17 @@ class DiffusionManager(private val context: Context) {
             threads = threads,
             onGpu = onGpu,
             vaeTiling = true,
+            backend = backend,
+            hybrid = hybrid,
         )
         if (ok) {
+            if (!currentBridge.configureSampler(profile.sampler)) {
+                currentBridge.close(); bridge = null; currentModelPath = null
+                return false
+            }
             currentModelPath = modelPath
+            currentProfile = profile
+            currentBackend = backend ?: if (onGpu) DiffusionBackend.GPU_OPENCL else DiffusionBackend.CPU
         }
         ok
     }

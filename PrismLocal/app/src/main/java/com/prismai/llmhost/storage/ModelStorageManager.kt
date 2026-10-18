@@ -30,6 +30,8 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 class ModelStorageManager(private val context: Context) {
+    enum class ModelKind { TEXT, IMAGE, UNKNOWN }
+    data class DiffusionProfile(val steps: Int = 1, val cfg: Float = 1f, val sampler: String = "default")
     private val modelsDir: File
         get() = File(context.filesDir, "models")
 
@@ -42,7 +44,10 @@ class ModelStorageManager(private val context: Context) {
         val bytes: Long,
         val importedAt: String,
         val validation: ModelValidation,
-    )
+        val diffusionProfile: DiffusionProfile = DiffusionProfile(),
+    ) {
+        val kind: ModelKind get() = validation.kind
+    }
 
     data class ModelValidation(
         val format: String,
@@ -50,6 +55,7 @@ class ModelStorageManager(private val context: Context) {
         val status: String,
         val validatedAt: String,
         val metadata: GgufMetadataSummary? = null,
+        val kind: ModelKind = ModelKind.UNKNOWN,
     )
 
     data class GgufMetadataSummary(
@@ -163,7 +169,8 @@ class ModelStorageManager(private val context: Context) {
         val versionId = newVersionId()
         val now = Instant.now().toString()
         val stagingDir = File(modelsDir, "$IMPORT_STAGING_DIR/$modelId-$versionId-${UUID.randomUUID()}")
-        val stagedModel = File(stagingDir, MODEL_FILE)
+        val storedName = if (displayName.endsWith(".safetensors", true)) "model.safetensors" else MODEL_FILE
+        val stagedModel = File(stagingDir, storedName)
 
         val existingManifest = File(modelsDir, "$modelId/$MANIFEST_FILE")
         if (existingManifest.exists()) {
@@ -207,8 +214,8 @@ class ModelStorageManager(private val context: Context) {
             modelRoot.mkdirs()
             promoteDirectory(stagingDir, targetVersionDir)
 
-            val activeFile = File(targetVersionDir, MODEL_FILE)
-            val versionFile = "versions/$versionId/$MODEL_FILE"
+            val activeFile = File(targetVersionDir, storedName)
+            val versionFile = "versions/$versionId/$storedName"
             val manifest = mergedManifest(
                 modelRoot = modelRoot,
                 modelId = modelId,
@@ -425,7 +432,8 @@ class ModelStorageManager(private val context: Context) {
                     )
                 )
             }
-            val validation = parseValidation(activeObj)
+            val savedValidation = parseValidation(activeObj)
+            val validation = savedValidation?.takeIf { it.kind != ModelKind.UNKNOWN }
                 ?: validateGguf(modelFile)
                 ?: return ModelResolveResult.Failure(
                     ModelStorageError(
@@ -456,6 +464,11 @@ class ModelStorageManager(private val context: Context) {
                     bytes = activeObj.optLong("bytes", modelFile.length()),
                     importedAt = activeObj.optString("imported_at", ""),
                     validation = validation,
+                    diffusionProfile = activeObj.optJSONObject("diffusion_profile")?.let {
+                        DiffusionProfile(it.optInt("steps", 1).coerceIn(1, 50),
+                            it.optDouble("cfg", 1.0).toFloat().coerceIn(0f, 20f),
+                            it.optString("sampler", "default"))
+                    } ?: DiffusionProfile(),
                 )
             )
         } catch (e: JSONException) {
@@ -508,6 +521,7 @@ class ModelStorageManager(private val context: Context) {
                     "validation",
                     JSONObject()
                         .put("format", validation.format)
+                        .put("model_kind", validation.kind.name)
                         .put("gguf_version", validation.ggufVersion)
                         .put("status", validation.status)
                         .put("validated_at", validation.validatedAt)
@@ -609,6 +623,7 @@ class ModelStorageManager(private val context: Context) {
     }
 
     private fun validateGguf(file: File): ModelValidation? {
+        if (file.extension.equals("safetensors", true)) return validateSafetensors(file)
         file.inputStream().use { input ->
             val reader = GgufReader(input)
             if (reader.readAscii(4) != "GGUF") {
@@ -625,6 +640,7 @@ class ModelStorageManager(private val context: Context) {
                 status = "verified",
                 validatedAt = Instant.now().toString(),
                 metadata = metadata,
+                kind = inspectGgufKind(file, metadata),
             )
         }
     }
@@ -637,8 +653,62 @@ class ModelStorageManager(private val context: Context) {
             status = validation.optString("status", "unknown"),
             validatedAt = validation.optString("validated_at", ""),
             metadata = parseMetadataSummary(validation.optJSONObject("metadata")),
-        ).takeIf { it.format == "GGUF" && it.ggufVersion in 1..4 }
+            kind = runCatching { ModelKind.valueOf(validation.optString("model_kind", "UNKNOWN")) }.getOrDefault(ModelKind.UNKNOWN),
+        ).takeIf { (it.format == "GGUF" && it.ggufVersion in 1..4) || it.format == "SAFETENSORS" }
     }
+
+    private fun inspectGgufKind(file: File, metadata: GgufMetadataSummary?): ModelKind = runCatching {
+        file.inputStream().buffered().use { input ->
+            val r = GgufReader(input)
+            if (r.readAscii(4) != "GGUF" || r.readU32() !in 2..3) return ModelKind.UNKNOWN
+            val tensors = r.readU64()
+            val kv = r.readU64()
+            require(tensors in 1..100_000 && kv in 0..100_000)
+            repeat(kv.toInt()) { r.readGgufString(); r.readMetadataValue(r.readU32()) }
+            var image = false
+            var text = false
+            repeat(tensors.toInt()) {
+                val name = r.readGgufString()
+                if (name.startsWith("model.diffusion_model.") || name.startsWith("diffusion_model.") ||
+                    name.startsWith("cond_stage_model.") || name.startsWith("first_stage_model.")) image = true
+                if (name == "token_embd.weight" || name.startsWith("blk.")) text = true
+                val dimensions = r.readU32()
+                require(dimensions in 1..8)
+                repeat(dimensions) { require(r.readU64() > 0) }
+                r.readU32(); r.readU64()
+            }
+            when {
+                image -> ModelKind.IMAGE
+                text && !metadata?.architecture.isNullOrBlank() -> ModelKind.TEXT
+                else -> ModelKind.UNKNOWN
+            }
+        }
+    }.getOrDefault(ModelKind.UNKNOWN)
+
+    private fun validateSafetensors(file: File): ModelValidation? = runCatching {
+        java.io.RandomAccessFile(file, "r").use { input ->
+            val length = java.lang.Long.reverseBytes(input.readLong())
+            require(length in 2..minOf(32L * 1024 * 1024, file.length() - 8))
+            val bytes = ByteArray(length.toInt()); input.readFully(bytes)
+            val header = JSONObject(bytes.toString(Charsets.UTF_8))
+            var image = false
+            var count = 0
+            for (key in header.keys()) {
+                if (key == "__metadata__") continue
+                val tensor = header.getJSONObject(key)
+                val offsets = tensor.getJSONArray("data_offsets")
+                val start = offsets.getLong(0); val end = offsets.getLong(1)
+                require(start >= 0 && end >= start && end <= file.length() - 8 - length)
+                val shape = tensor.getJSONArray("shape")
+                repeat(shape.length()) { require(shape.getLong(it) >= 0) }
+                require(tensor.getString("dtype").isNotBlank())
+                if (key.startsWith("model.diffusion_model.") || key.startsWith("diffusion_model.")) image = true
+                count++
+            }
+            require(image && count > 0)
+            ModelValidation("SAFETENSORS", 0, "verified", Instant.now().toString(), kind = ModelKind.IMAGE)
+        }
+    }.getOrNull()
 
     private fun parseMetadataSummary(metadata: JSONObject?): GgufMetadataSummary? {
         if (metadata == null) return null

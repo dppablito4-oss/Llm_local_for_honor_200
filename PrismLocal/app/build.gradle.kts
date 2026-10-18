@@ -79,6 +79,9 @@ android {
     namespace = "com.prismai.llmhost"
     compileSdk = 36
     ndkVersion = "28.2.13676358"
+    testBuildType = providers.gradleProperty("LLMHOST_TEST_BUILD_TYPE").orElse("debug").get().also {
+        require(it == "debug" || it == "adreno") { "Supported test build types: debug, adreno" }
+    }
 
     defaultConfig {
         applicationId = "com.prismai.llmhost"
@@ -87,6 +90,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testProguardFiles("proguard-android-test.pro")
         manifestPlaceholders["appLabel"] = "Prism Local"
         buildConfigField("String", "SUPABASE_AUTH_URL", quoteBuildConfig(supabaseAuthUrl))
         buildConfigField("String", "SUPABASE_ANON_KEY", quoteBuildConfig(supabaseAnonKey))
@@ -247,8 +251,13 @@ android {
         // Falls back to CPU-KleidiAI labeling when OpenCL is not configured.
         create("adreno") {
             initWith(getByName("release"))
+            proguardFiles("proguard-adreno.pro")
+            // Keep real release R8 behavior. Test-only public smoke weights and
+            // reports use this package's external files, never the CPU app data.
+            isDebuggable = false
             applicationIdSuffix = ".adreno"
             versionNameSuffix = "-adreno"
+            manifestPlaceholders["appLabel"] = "Prism OpenCL experimental"
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             buildConfigField("boolean", "LLMHOST_DEBUG_HOOKS", "false")
@@ -351,7 +360,19 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("junit:junit:4.13.2")
+    // Resolve AndroidX/Guava compile-time annotations during test shrinking.
+    // Do not package annotation processor metadata referring to JDK compiler APIs.
+    androidTestCompileOnly("com.google.errorprone:error_prone_annotations:2.36.0")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("adreno")) { variant ->
+        // Build-type ABI filters merge with defaultConfig in AGP 9. Keep the
+        // experimental APK arm64-only without changing the CPU variants.
+        variant.packaging.jniLibs.excludes.add("**/x86_64/**")
+        variant.externalNativeBuild?.abiFilters?.set(setOf("arm64-v8a"))
+    }
 }
 
 ksp {

@@ -69,6 +69,7 @@ endif()
 if(LLMHOST_ENABLE_OPENCL)
     set(OPENCL_HEADERS_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/OpenCL-Headers")
     add_library(OpenCL SHARED opencl_loader/opencl_loader.c)
+    set_target_properties(OpenCL PROPERTIES OUTPUT_NAME prism_opencl)
     target_include_directories(OpenCL PUBLIC ${OPENCL_HEADERS_DIR})
     target_link_libraries(OpenCL PRIVATE log dl)
     add_library(OpenCL::OpenCL ALIAS OpenCL)
@@ -139,6 +140,7 @@ add_library(llmhost SHARED
     Engine.cpp
     diffusion/DiffusionEngine.cpp
     diffusion/diffusion_jni.cpp
+    diffusion/OpenClDiagnostics.cpp
 )
 
 if(LLMHOST_DEBUG_HOOKS)

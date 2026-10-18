@@ -2,6 +2,7 @@
 #include <string>
 #include <exception>
 #include "DiffusionEngine.hpp"
+#include "OpenClDiagnostics.hpp"
 #include "runtime/NativeHandleRegistry.hpp"
 
 using prism::diffusion::DiffusionEngine;
@@ -32,6 +33,13 @@ static jbyteArray toJByteArray(JNIEnv* env, const std::vector<uint8_t>& bytes) {
 }
 
 extern "C" {
+
+JNIEXPORT jstring JNICALL
+Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeGpuDiagnostics(
+    JNIEnv* env, jobject, jboolean compute) {
+    try { return stringToJstring(env, prism::diffusion::openClDiagnostics(compute)); }
+    catch (const std::exception&) { return stringToJstring(env, "{\"status\":\"GPU_NO_DETECTADA\",\"error\":\"diagnostic exception\"}"); }
+}
 
 JNIEXPORT jlong JNICALL
 Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeCreate(
@@ -76,6 +84,24 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeLoadModel(
 
     bool ok = engine->loadModel(m_path, v_path, t_path, threads, on_gpu, vae_tiling);
     return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeLoadModelWithBackend(
+    JNIEnv* env, jobject, jlong handle, jstring model, jstring vae, jstring taesd,
+    jint threads, jstring mode, jboolean tiling, jboolean hybrid) {
+    auto engine = g_diffusion_engines.acquire(handle);
+    if (!engine) return JNI_FALSE;
+    try {
+        return engine->loadModelWithBackend(jstringToString(env, model), jstringToString(env, vae),
+            jstringToString(env, taesd), threads, jstringToString(env, mode), tiling, hybrid) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception&) { return JNI_FALSE; }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeBackendInfo(JNIEnv* env, jobject, jlong handle) {
+    auto engine = g_diffusion_engines.acquire(handle);
+    return stringToJstring(env, engine ? engine->backendInfo() : "{\"status\":\"BACKEND_NOT_VERIFIED\"}");
 }
 
 JNIEXPORT jobject JNICALL
@@ -138,6 +164,14 @@ Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeGenerate(
     env->DeleteLocalRef(result_class);
 
     return obj;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_prismai_llmhost_diffusion_NativeDiffusionBridge_nativeConfigureSampler(
+    JNIEnv* env, jobject, jlong handle, jstring sampler
+) {
+    auto engine = g_diffusion_engines.acquire(handle);
+    return engine && engine->configureSampler(jstringToString(env, sampler)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

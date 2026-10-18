@@ -35,6 +35,10 @@ public:
         bool on_gpu = true,
         bool enable_vae_tiling = true
     );
+    bool loadModelWithBackend(const std::string& model_path, const std::string& vae_path,
+        const std::string& taesd_path, int n_threads, const std::string& mode,
+        bool enable_vae_tiling, bool hybrid);
+    std::string backendInfo() const;
 
     DiffusionResult generate(
         const std::string& prompt,
@@ -49,6 +53,7 @@ public:
     );
 
     void cancel();
+    bool configureSampler(const std::string& sampler);
     void shutdown();
     void unload();
     bool isLoaded() const;

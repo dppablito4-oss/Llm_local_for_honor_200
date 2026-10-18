@@ -35,6 +35,8 @@ validation/
 app/src/androidTest/assets/smoke-model/
 
 # Runtime logs and generated evidence
+__pycache__/
+*.pyc
 *.log
 logcat-*.txt
 llm_host_prefs.xml

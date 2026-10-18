@@ -114,6 +114,11 @@ class ModelManager(
             }
             is ModelStorageManager.ModelResolveResult.Success -> {
                 val activeModel = resolved.model
+                if (activeModel.kind == ModelStorageManager.ModelKind.IMAGE) {
+                    uiState._runtimeStatus.value = RuntimeStatus.IDLE
+                    eventBus.publish("Selecciona este checkpoint en el motor de imágenes")
+                    return@withContext false
+                }
                 val requestedSettings = uiState._generationSettings.value.clamped()
                 val requestedPlanKey = InferencePlan.loadKey(
                     InferencePlan.fromSettings(

@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
+enum class DiffusionBackend { CPU, GPU_OPENCL, AUTO }
+
 class NativeDiffusionBridge : Closeable {
 
     companion object {
@@ -26,9 +28,12 @@ class NativeDiffusionBridge : Closeable {
         threads: Int = 4,
         onGpu: Boolean = true,
         vaeTiling: Boolean = true,
+        backend: DiffusionBackend? = null,
+        hybrid: Boolean = false,
     ): Boolean = withContext(Dispatchers.IO) {
         if (isDestroyed.get() || nativeHandle == 0L) return@withContext false
-        nativeLoadModel(nativeHandle, modelPath, vaePath, taesdPath, threads, onGpu, vaeTiling)
+        if (backend == null) nativeLoadModel(nativeHandle, modelPath, vaePath, taesdPath, threads, onGpu, vaeTiling)
+        else nativeLoadModelWithBackend(nativeHandle, modelPath, vaePath, taesdPath, threads, backend.name, vaeTiling, hybrid)
     }
 
     suspend fun generate(
@@ -86,6 +91,22 @@ class NativeDiffusionBridge : Closeable {
             }
         }
     }
+
+    fun configureSampler(sampler: String): Boolean =
+        !isDestroyed.get() && nativeConfigureSampler(nativeHandle, sampler)
+
+    suspend fun gpuDiagnostics(compute: Boolean = false): String = withContext(Dispatchers.IO) {
+        nativeGpuDiagnostics(compute)
+    }
+
+    private external fun nativeGpuDiagnostics(compute: Boolean): String
+
+    fun backendInfo(): String = if (isDestroyed.get()) "{\"status\":\"BACKEND_NOT_VERIFIED\"}" else nativeBackendInfo(nativeHandle)
+    private external fun nativeBackendInfo(handle: Long): String
+    private external fun nativeLoadModelWithBackend(handle: Long, model: String, vae: String, taesd: String,
+        threads: Int, backend: String, tiling: Boolean, hybrid: Boolean): Boolean
+
+    private external fun nativeConfigureSampler(handle: Long, sampler: String): Boolean
 
     // --- JNI declarations ---
     private external fun nativeCreate(): Long

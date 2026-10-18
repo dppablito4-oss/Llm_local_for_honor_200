@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <android/log.h>
 
 #define LOG_TAG "OpenCLLoader"
@@ -11,29 +12,45 @@
 
 static void* g_opencl_handle = NULL;
 static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
+static const char* g_driver_path = "UNAVAILABLE";
 
 static void* load_symbol(const char* name) {
     if (!g_opencl_handle) return NULL;
-    return dlsym(g_opencl_handle, name);
+    dlerror();
+    void* symbol = dlsym(g_opencl_handle, name);
+    const char* error = dlerror();
+    if (error) LOGE("dlsym(%s): %s", name, error);
+    return error ? NULL : symbol;
 }
 
 static void init_opencl_lib(void) {
     static const char* candidate_paths[] = {
-        "libOpenCL.so",
         "/vendor/lib64/libOpenCL.so",
         "/system/vendor/lib64/libOpenCL.so",
         "/system/lib64/libOpenCL.so",
-        "/vendor/lib64/egl/libGLES_mali.so",
-        "/vendor/lib/libOpenCL.so",
+        "libOpenCL.so",
         NULL
     };
 
     for (int i = 0; candidate_paths[i] != NULL; ++i) {
+        dlerror();
         g_opencl_handle = dlopen(candidate_paths[i], RTLD_NOW | RTLD_LOCAL);
         if (g_opencl_handle) {
+            // This shim also has the SONAME libOpenCL.so. Never resolve calls
+            // back to ourselves, which would recurse until stack exhaustion.
+            void* entry = dlsym(g_opencl_handle, "clGetPlatformIDs");
+            if (!entry || entry == (void*)&clGetPlatformIDs) {
+                LOGE("Rejected self/invalid OpenCL driver: %s", candidate_paths[i]);
+                dlclose(g_opencl_handle);
+                g_opencl_handle = NULL;
+                continue;
+            }
             LOGI("Successfully loaded OpenCL library from: %s", candidate_paths[i]);
+            g_driver_path = candidate_paths[i];
             return;
         }
+        const char* error = dlerror();
+        LOGW("dlopen(%s): %s", candidate_paths[i], error ? error : "unknown error");
     }
 
     LOGW("Could not find or dlopen libOpenCL.so from any standard vendor path");
@@ -43,13 +60,25 @@ static void ensure_opencl_loaded(void) {
     pthread_once(&g_init_once, init_opencl_lib);
 }
 
+const char* prism_opencl_driver_path(void) {
+    ensure_opencl_loaded();
+    return g_driver_path;
+}
+
 #define RESOLVE_FN(name) \
     typedef typeof(name)* fn_##name; \
-    static fn_##name p_##name = NULL; \
+    static _Atomic(void*) cached_##name = NULL; \
     ensure_opencl_loaded(); \
-    if (!p_##name) { \
-        p_##name = (fn_##name)load_symbol(#name); \
-    }
+    void* resolved_##name = atomic_load_explicit(&cached_##name, memory_order_acquire); \
+    if (!resolved_##name) { \
+        resolved_##name = load_symbol(#name); \
+        if (resolved_##name == (void*)&name) { \
+            LOGE("Rejected wrapper recursion for %s", #name); \
+            resolved_##name = NULL; \
+        } \
+        atomic_store_explicit(&cached_##name, resolved_##name, memory_order_release); \
+    } \
+    fn_##name p_##name = (fn_##name)resolved_##name;
 
 // 1. Platform & Device APIs
 CL_API_ENTRY cl_int CL_API_CALL

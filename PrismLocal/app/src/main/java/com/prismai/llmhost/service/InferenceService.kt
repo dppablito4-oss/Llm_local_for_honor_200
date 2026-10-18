@@ -676,6 +676,14 @@ class InferenceService : Service() {
         return operationMutex.withLock {
             Log.d(TAG, "switchModel requested modelId=$modelId")
             cancelAndJoinGenerationLocked("model switch")
+            val info = modelStorageManager.activeModelInfo(modelId)
+            if (info?.kind == ModelStorageManager.ModelKind.IMAGE) {
+                diffusionManager.unload()
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString("active_diffusion_model", modelId).apply()
+                publishUiEvent("Modelo de imagen seleccionado: $modelId. Se cargará al generar.")
+                return@withLock true
+            }
+            diffusionManager.unload()
             modelManager.switchModel(modelId)
         }
     }
@@ -898,6 +906,11 @@ class InferenceService : Service() {
                 }
                 imageJob = startImageOperationLocked { generateImageDirect(imagePrompt) }
             } else {
+                diffusionManager.unload()
+                if (_currentModel.value == null) {
+                    val textModel = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString("active_model", null)
+                    if (textModel != null) modelManager.switchModel(textModel)
+                }
                 generationOrchestrator.generate(prompt, benchmarkPreset)
             }
             activeJob = generationJob
@@ -1034,7 +1047,7 @@ class InferenceService : Service() {
     )
 
     private fun parseImageCommandArgs(rawPrompt: String): ImageCommandArgs {
-        var steps = 1
+        var steps = diffusionManager.currentProfile.steps
         var seed = System.currentTimeMillis()
         var skipEnhancer = false
 
@@ -1044,7 +1057,7 @@ class InferenceService : Service() {
         while (i < tokens.size) {
             when (tokens[i].lowercase()) {
                 "--steps" -> {
-                    steps = tokens.getOrNull(i + 1)?.toIntOrNull()?.coerceIn(1, 8) ?: 1
+                    steps = tokens.getOrNull(i + 1)?.toIntOrNull()?.coerceIn(1, 50) ?: steps
                     i += 2
                 }
                 "--seed" -> {
@@ -1106,9 +1119,33 @@ class InferenceService : Service() {
         _generationPerformance.value = null
         startGenerationForeground()
         val job = serviceScope.async(start = CoroutineStart.LAZY) {
+            val thermalMonitor = launch(Dispatchers.Default) {
+                while (true) {
+                    delay(1000L)
+                    if (imageTooHot()) {
+                        serviceScope.launch {
+                            operationMutex.withLock {
+                                if (activeImageSession == session && generationSession == session) {
+                                    publishUiEvent("Generación detenida por temperatura. Deja enfriar el teléfono.")
+                                    diffusionManager.cancel()
+                                    cancelAndJoinGenerationLocked("image thermal protection")
+                                    agentTrace.finalizeTrace(success = false, abortReason = "Device thermal status severe")
+                                }
+                            }
+                        }
+                        return@launch
+                    }
+                }
+            }
             try {
+                // Both engines have large working sets. Keep the text selection
+                // in preferences, release its weights, and reload on next text.
+                engine.unloadModel()
+                _currentModel.value = null
+                _activeModelInfo.value = null
                 block()
             } finally {
+                thermalMonitor.cancel()
                 if (generationSession == session) {
                     activeImageSession = null
                     generationJob = null
@@ -1140,13 +1177,13 @@ class InferenceService : Service() {
         )
         try {
             currentCoroutineContext().ensureActive()
-            if (!diffusionManager.isLoaded()) {
-                val installed = modelStorageManager.listInstalledModels()
-                val diffModelId = installed.firstOrNull { id ->
-                    id.contains("sd", ignoreCase = true) ||
-                    id.contains("diffusion", ignoreCase = true) ||
-                    id.contains("turbo", ignoreCase = true)
-                }
+            if (imageTooHot()) {
+                val message = "El teléfono está demasiado caliente para generar imágenes. Deja que se enfríe antes de reintentar."
+                updateTranscriptMessage(assistantMsgId, message)
+                return message
+            }
+            if (!diffusionManager.isLoadedForRequestedBackend()) {
+                val diffModelId = diffusionManager.selectedModel()?.id
 
                 if (diffModelId == null) {
                     val notFoundMsg = "⚠️ No hay ningún modelo de imagen (Stable Diffusion) instalado en el teléfono.\n\nVe a **Modelos > Descargas** e instala **SDXS 512 (Ultra Rápido)** o **SD-Turbo** para poder generar imágenes."
@@ -1164,7 +1201,10 @@ class InferenceService : Service() {
                 val loaded = diffusionManager.loadModel(
                     modelPath = activeModel.file.absolutePath,
                     threads = 4,
-                    onGpu = true,
+                    onGpu = false,
+                    backend = diffusionManager.requestedBackend(),
+                    hybrid = true,
+                    profile = activeModel.diffusionProfile,
                 )
                 if (!loaded) {
                     val err = "❌ Falló la carga del modelo de difusión en la GPU/CPU."
@@ -1184,13 +1224,13 @@ class InferenceService : Service() {
                 width = 512,
                 height = 512,
                 steps = parsedArgs.steps,
-                cfgScale = 1.0f,
+                cfgScale = diffusionManager.currentProfile.cfg,
                 seed = parsedArgs.seed,
             )
 
             return result.fold(
                 onSuccess = { output ->
-                    val successMsg = "🎨 **Imagen generada con Stable Diffusion:**\n\n![${parsedArgs.cleanPrompt}](file://${output.file.absolutePath})\n\n⚡ ${"%.2f".format(output.generationTimeSec)}s • ${output.steps} paso${if (output.steps > 1) "s" else ""} (SDXS-512) • Seed: `${output.seed}`\n*Guardada en ${output.file.name}*"
+                    val successMsg = "🎨 **Imagen generada con Stable Diffusion:**\n\n![${parsedArgs.cleanPrompt}](file://${output.file.absolutePath})\n\n⚡ ${"%.2f".format(output.generationTimeSec)}s • ${output.steps} pasos • ${diffusionManager.selectedModel()?.id.orEmpty()} • Seed: `${output.seed}`\n*Guardada en ${output.file.name}*"
                     updateTranscriptMessage(assistantMsgId, successMsg)
                     publishUiEvent("Imagen generada correctamente")
                     successMsg
@@ -1211,6 +1251,9 @@ class InferenceService : Service() {
             return message
         }
     }
+
+    private fun imageTooHot(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        (getSystemService(PowerManager::class.java)?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE
 
     private fun appendToolResult(result: AgentToolResult) {
         appendTranscriptMessage(

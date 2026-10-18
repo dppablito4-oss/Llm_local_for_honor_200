@@ -4,6 +4,17 @@ param(
     [ValidatePattern('^[A-Za-z0-9_.]+$')][string]$TestPackage = 'com.prismai.llmhost.dev.debug.test',
     [string]$Serial,
     [string]$LogPath,
+    [ValidatePattern('^[A-Za-z0-9_.-]+$')][string]$ModelId,
+    [ValidatePattern('^[A-Za-z0-9_.-]+$')][string]$RestoreTextModel,
+    [switch]$ImageGpu,
+    [ValidateSet('CPU','GPU_OPENCL','AUTO')][string]$DiffusionBackend,
+    [switch]$Hybrid,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ModelSha256,
+    [ValidateSet('CLIP','UNET','VAE')][string]$CancelPhase,
+    [ValidateRange(1,50)][int]$ImageSteps,
+    [ValidateRange(30,3600)][int]$ImageTimeoutSeconds = 900,
+    [ValidatePattern('^[A-Za-z0-9_.-]+\.png$')][string]$ExistingPng,
+    [ValidatePattern('^[0-9]+(\.[0-9]+)?$')][string]$ExistingSeconds,
     [string]$Sdk = $env:ANDROID_HOME
 )
 $ErrorActionPreference = 'Stop'
@@ -15,7 +26,20 @@ if (-not $Serial) {
     if ($devices.Count -ne 1) { throw 'Connect exactly one device or supply -Serial' }
     $Serial = $devices[0]
 }
-$result = @(& $adb -s $Serial shell am instrument -w -r -e class $Class "$TestPackage/androidx.test.runner.AndroidJUnitRunner")
+$instrumentArgs = @('-s', $Serial, 'shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $Class)
+if ($ModelId) { $instrumentArgs += @('-e', 'model_id', $ModelId) }
+if ($RestoreTextModel) { $instrumentArgs += @('-e', 'restore_text_model', $RestoreTextModel) }
+if ($ImageGpu) { $instrumentArgs += @('-e', 'image_gpu', 'true') }
+if ($DiffusionBackend) { $instrumentArgs += @('-e', 'diffusion_backend', $DiffusionBackend) }
+if ($Hybrid) { $instrumentArgs += @('-e', 'hybrid', 'true') }
+if ($ModelSha256) { $instrumentArgs += @('-e', 'model_sha256', $ModelSha256) }
+if ($CancelPhase) { $instrumentArgs += @('-e', 'cancel_phase', $CancelPhase) }
+if ($ImageSteps) { $instrumentArgs += @('-e', 'image_steps', "$ImageSteps") }
+$instrumentArgs += @('-e', 'image_timeout_seconds', "$ImageTimeoutSeconds")
+if ($ExistingPng) { $instrumentArgs += @('-e', 'existing_png', $ExistingPng) }
+if ($ExistingSeconds) { $instrumentArgs += @('-e', 'existing_seconds', $ExistingSeconds) }
+$instrumentArgs += "$TestPackage/androidx.test.runner.AndroidJUnitRunner"
+$result = @(& $adb @instrumentArgs)
 $adbExit = $LASTEXITCODE
 if ($LogPath) {
     $parent = Split-Path -Parent $LogPath

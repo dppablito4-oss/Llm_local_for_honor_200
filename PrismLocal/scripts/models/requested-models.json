@@ -1,0 +1,106 @@
+[
+  {
+    "key": "A",
+    "repo": "bartowski/Phi-3.5-mini-instruct_Uncensored-GGUF",
+    "file": "Phi-3.5-mini-instruct_Uncensored-Q4_K_M.gguf",
+    "revision": "ee8d5d6896f1ac8d0f95f7dff87bc2b2d7aa6e72",
+    "remote": {
+      "rfilename": "Phi-3.5-mini-instruct_Uncensored-Q4_K_M.gguf",
+      "blobId": "f82f41d15f0d9187a9d0baf9af4643c6ddbb5093",
+      "size": 2393232448,
+      "lfs": {
+        "sha256": "9ad0e44f9441c0ffb4adc8f3bd3a9ba3d662aaa82f617a6dfbff6d4ae31a946d",
+        "size": 2393232448,
+        "pointerSize": 135
+      }
+    },
+    "type": "text"
+  },
+  {
+    "key": "E",
+    "repo": "second-state/Realistic_Vision_V6.0_B1-GGUF",
+    "file": "realisticVisionV60B1_v51HyperVAE-Q4_0.gguf",
+    "revision": "81bf97de0845f1373bf99b7d9b541642deac3dab",
+    "remote": {
+      "rfilename": "realisticVisionV60B1_v51HyperVAE-Q4_0.gguf",
+      "blobId": "5ac0e93ff447315d27d43c52b400ef106dfcbbe9",
+      "size": 1570410496,
+      "lfs": {
+        "sha256": "04b3a83ff7511dca57e4733d7093f3f5eefd6dc88b1b44ed97279119ccecfa26",
+        "size": 1570410496,
+        "pointerSize": 135
+      }
+    },
+    "type": "image"
+  },
+  {
+    "key": "B",
+    "repo": "bartowski/p-e-w_Qwen3-4B-Instruct-2507-heretic-GGUF",
+    "file": "p-e-w_Qwen3-4B-Instruct-2507-heretic-Q4_K_M.gguf",
+    "revision": "374467f099f99156987afeeea6df5bc1f090ff4b",
+    "remote": {
+      "rfilename": "p-e-w_Qwen3-4B-Instruct-2507-heretic-Q4_K_M.gguf",
+      "blobId": "e1c16e39911da160fd876164767bedb5b394e381",
+      "size": 2497279424,
+      "lfs": {
+        "sha256": "d4d7fcd11d36495fa340f91b514ae3a47f5da21cf27c158d620d736e3bb35a61",
+        "size": 2497279424,
+        "pointerSize": 135
+      }
+    },
+    "type": "text"
+  },
+  {
+    "key": "D",
+    "repo": "XpucT/Deliberate",
+    "file": "Deliberate_v3.safetensors",
+    "revision": "740b11ddb4d7999a37069b4c5a3f3f3aeee97644",
+    "remote": {
+      "rfilename": "Deliberate_v3.safetensors",
+      "blobId": "64f5def2e96437a70ee5227e3798362e6e068618",
+      "size": 2132626832,
+      "lfs": {
+        "sha256": "aadddd3d7579de79db91f4ac03f2fbad4e9b71216bbebb50c338cae74b77cb27",
+        "size": 2132626832,
+        "pointerSize": 135
+      }
+    },
+    "type": "image"
+  },
+  {
+    "key": "C",
+    "repo": "mradermacher/Qwen2.5-3B-Instruct-abliterated-GGUF",
+    "file": "Qwen2.5-3B-Instruct-abliterated.Q4_K_M.gguf",
+    "revision": "80c1798789b2759d9d6d707a6b750ece26cff263",
+    "remote": {
+      "rfilename": "Qwen2.5-3B-Instruct-abliterated.Q4_K_M.gguf",
+      "blobId": "09b3d872e5646f9f64362e6d406711924b78ec12",
+      "size": 1929903520,
+      "lfs": {
+        "sha256": "c771d34ef5ad81f3a2ffb44a747c61de35b7ea2cc1fa522d9613e872a6dfe9eb",
+        "size": 1929903520,
+        "pointerSize": 135
+      }
+    },
+    "type": "text",
+    "requested_file": "Qwen2.5-3B-Instruct-abliterated-Q4_K_M.gguf",
+    "alternative_authorized": true
+  },
+  {
+    "key": "F",
+    "repo": "Lykon/dreamshaper-8-lcm",
+    "file": "DreamShaper8_LCM.safetensors",
+    "revision": "4645d8bc6a8e6b106d21606d63e8460cdad4f1a6",
+    "remote": {
+      "rfilename": "DreamShaper8_LCM.safetensors",
+      "blobId": "47c048a19c65fcdb8679031fa60ddae1757a9e6a",
+      "size": 2133804992,
+      "lfs": {
+        "sha256": "a4f3e1526c5dc4fcbe342f5c410d83ae202c7a415fcefcbb92e0f93fcd0a87c3",
+        "size": 2133804992,
+        "pointerSize": 135
+      }
+    },
+    "type": "image"
+  }
+]

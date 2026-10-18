@@ -22,18 +22,11 @@ class DiffusionTools(
             )
         }
 
-        val steps = call.arguments.optInt("steps", 4).coerceIn(1, 20)
         val width = call.arguments.optInt("width", 512).coerceIn(256, 1024)
         val height = call.arguments.optInt("height", 512).coerceIn(256, 1024)
-        val cfgScale = call.arguments.optDouble("cfg_scale", 1.0).toFloat()
 
-        if (!diffusionManager.isLoaded()) {
-            val installed = modelStorageManager.listInstalledModels()
-            val diffModelId = installed.firstOrNull { id ->
-                id.contains("sd", ignoreCase = true) ||
-                id.contains("diffusion", ignoreCase = true) ||
-                id.contains("turbo", ignoreCase = true)
-            }
+        if (!diffusionManager.isLoadedForRequestedBackend()) {
+            val diffModelId = diffusionManager.selectedModel()?.id
 
             if (diffModelId == null) {
                 return@withContext AgentToolResult(
@@ -55,7 +48,10 @@ class DiffusionTools(
             val loaded = diffusionManager.loadModel(
                 modelPath = activeModel.file.absolutePath,
                 threads = 4,
-                onGpu = true,
+                onGpu = false,
+                backend = diffusionManager.requestedBackend(),
+                hybrid = true,
+                profile = activeModel.diffusionProfile,
             )
 
             if (!loaded) {
@@ -68,6 +64,8 @@ class DiffusionTools(
             }
         }
 
+        val steps = call.arguments.optInt("steps", diffusionManager.currentProfile.steps).coerceIn(1, 50)
+        val cfgScale = call.arguments.optDouble("cfg_scale", diffusionManager.currentProfile.cfg.toDouble()).toFloat().coerceIn(0f, 20f)
         val result = diffusionManager.generateImage(
             prompt = prompt,
             width = width,

@@ -49,6 +49,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import com.prismai.llmhost.diffusion.DiffusionBackend
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -119,7 +121,9 @@ internal fun ControlPlaneSheet(
     val isLoadingModel = runtimeStatus == RuntimeStatus.LOADING_MODEL
     val controlsEnabled = !isGenerating && !isLoadingModel && !isImporting
     val requestModelSwitch: (String, ModelReadiness?) -> Unit = { modelId, readiness ->
-        if (readiness?.fit?.rating != null && readiness.fit.rating != ModelFitRating.SAFE) {
+        if (readiness?.info?.kind == ModelStorageManager.ModelKind.IMAGE) {
+            onSwitchModel(modelId)
+        } else if (readiness?.fit?.rating != null && readiness.fit.rating != ModelFitRating.SAFE) {
             riskyModel = readiness
         } else {
             pendingModelId = modelId
@@ -325,9 +329,15 @@ internal fun ControlPlaneSheet(
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
-                                            readiness?.let { r ->
+                                            readiness?.info?.let { info ->
+                                                val quant = ModelReadinessAssessor.ggufFileTypeHint(info.validation.metadata?.fileType)
+                                                    ?: Regex("(?i)[QI]\\d_[A-Z0-9_]+").find(info.fileName)?.value ?: "Sin cuantizar"
+                                                Text("${if (info.kind == ModelStorageManager.ModelKind.IMAGE) "IMAGEN" else "TEXTO"} • ${info.validation.format} • ${com.prismai.llmhost.util.FormatUtils.formatBytesForMessage(info.bytes)} • $quant",
+                                                    style = MaterialTheme.typography.labelSmall)
+                                            }
+                                            readiness?.takeIf { it.info.kind == ModelStorageManager.ModelKind.IMAGE }?.let { r ->
                                                 Text(
-                                                    text = "${formatBytes(r.info.bytes)} • ${r.fit.quantization ?: "cuantización desconocida"}",
+                                                    text = "${r.info.diffusionProfile.sampler} • ${r.info.diffusionProfile.steps} pasos • CFG ${r.info.diffusionProfile.cfg}",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
@@ -340,7 +350,7 @@ internal fun ControlPlaneSheet(
                                                 enabled = serviceAvailable && controlsEnabled,
                                                 onClick = { requestModelSwitch(modelId, readiness) },
                                             ) {
-                                                Text("Usar", color = PrismBlue, style = MaterialTheme.typography.labelMedium)
+                                                Text(if (readiness?.info?.kind == ModelStorageManager.ModelKind.IMAGE) "Elegir imagen" else "Usar", color = PrismBlue, style = MaterialTheme.typography.labelMedium)
                                             }
                                         }
                                         TextButton(
@@ -374,6 +384,21 @@ internal fun ControlPlaneSheet(
                     }
                 }
                 1 -> {
+                    if (BuildConfig.BUILD_TYPE == "adreno") {
+                        val context = LocalContext.current
+                        val prefs = remember(context) { context.getSharedPreferences("llm_host_prefs", android.content.Context.MODE_PRIVATE) }
+                        var selected by remember { mutableStateOf(prefs.getString("diffusion_backend", "AUTO")) }
+                        Text("Imágenes: OpenCL experimental", style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DiffusionBackend.entries.forEach { mode ->
+                                OutlinedButton(enabled = controlsEnabled && selected != mode.name, onClick = {
+                                    prefs.edit().putString("diffusion_backend", mode.name).apply()
+                                    selected = mode.name
+                                }) { Text(when (mode) { DiffusionBackend.CPU -> "CPU"; DiffusionBackend.GPU_OPENCL -> "OpenCL"; DiffusionBackend.AUTO -> "Auto" }) }
+                            }
+                        }
+                        Text("Auto permite volver a CPU si OpenCL no carga. El cambio se aplica a la próxima imagen.", style = MaterialTheme.typography.bodySmall)
+                    }
                     RuntimeControls(
                         settings = generationSettings,
                         performance = generationPerformance,
@@ -584,7 +609,9 @@ private fun ModelPickerRow(
         )
         readiness?.let { info ->
             Text(
-                text = "${info.performance.label} • ${info.fit.quantization ?: "cuantización desconocida"} • esperado ${predictionRange(info.prediction)}",
+                text = if (info.info.kind == ModelStorageManager.ModelKind.IMAGE)
+                    "IMAGEN • ${info.info.diffusionProfile.sampler} • ${info.info.diffusionProfile.steps} pasos"
+                else "${info.performance.label} • ${info.fit.quantization ?: "cuantización desconocida"} • esperado ${predictionRange(info.prediction)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = performanceColor(info.performance.tier),
                 maxLines = 1,
